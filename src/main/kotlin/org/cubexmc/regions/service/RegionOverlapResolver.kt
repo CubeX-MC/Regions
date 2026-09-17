@@ -78,7 +78,9 @@ class RegionOverlapResolver {
             issues.add(ValidationIssue(
                 candidate.id,
                 ValidationSeverity.ERROR,
-                "Stateful modes overlap ($modes). Keep only one stateful mode in the overlapping area.",
+                "overlap-stateful-mode",
+                args = mapOf("modes" to modes),
+                message = "Stateful modes overlap ($modes). Keep only one stateful mode in the overlapping area.",
             ))
         }
         val flagKeys = group.flatMap { it.flags.keys }.map { it.lowercase(Locale.ROOT) }.toSortedSet()
@@ -93,7 +95,9 @@ class RegionOverlapResolver {
                 issues.add(ValidationIssue(
                     candidate.id,
                     ValidationSeverity.WARNING,
-                    "Overlapping flag '$key' resolves to '${winner.config.value}' from '${winner.sourceRegionId}' by priority.",
+                    "overlap-flag-priority",
+                    args = mapOf("key" to key, "value" to winner.config.value, "source" to winner.sourceRegionId),
+                    message = "Overlapping flag '$key' resolves to '${winner.config.value}' from '${winner.sourceRegionId}' by priority.",
                 ))
             }
         }
@@ -112,7 +116,9 @@ class RegionOverlapResolver {
                 issues.add(ValidationIssue(
                     candidate.id,
                     ValidationSeverity.WARNING,
-                    "Overlapping effect '$family' uses different combination strategies; " +
+                    "overlap-effect-strategy",
+                    args = mapOf("family" to family, "strategy" to winningStrategy.name.lowercase(Locale.ROOT), "source" to entries.first().first.id),
+                    message = "Overlapping effect '$family' uses different combination strategies; " +
                         "${winningStrategy.name.lowercase(Locale.ROOT)} from '${entries.first().first.id}' takes precedence.",
                 ))
             }
@@ -120,7 +126,9 @@ class RegionOverlapResolver {
                 issues.add(ValidationIssue(
                     candidate.id,
                     ValidationSeverity.ERROR,
-                    "Effect '$family' is exclusive but is provided by overlapping regions: " +
+                    "overlap-effect-exclusive",
+                    args = mapOf("family" to family, "regions" to entries.joinToString { it.first.id }),
+                    message = "Effect '$family' is exclusive but is provided by overlapping regions: " +
                         entries.joinToString { it.first.id },
                 ))
             }

@@ -1,482 +1,105 @@
 package org.cubexmc.regions.mode
 
-import org.bukkit.GameMode
-import org.bukkit.Location
-import org.bukkit.Material
 import org.bukkit.entity.Player
 import org.bukkit.event.entity.PlayerDeathEvent
 import org.bukkit.event.player.PlayerRespawnEvent
-import org.bukkit.inventory.ItemStack
 import org.cubexmc.regions.RegionsPlugin
+import org.cubexmc.regions.match.CombatMatchCoordinator
+import org.cubexmc.regions.match.JoinResult
+import org.cubexmc.regions.match.MatchParticipant
+import org.cubexmc.regions.match.MatchResult
+import org.cubexmc.regions.match.MatchStore
+import org.cubexmc.regions.match.SpectateResult
 import org.cubexmc.regions.model.RegionDefinition
-import org.cubexmc.regions.model.RegionTrigger
+import java.io.File
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 
+/**
+ * 双人决斗 / 工会战 / 大乱斗的对外入口。
+ *
+ * 这里只做门面：真正的状态机、装备托管与恢复协议在
+ * [CombatMatchCoordinator]（PLAN.md §6.1「保留 CombatModeService 作为现有调用方的入口，
+ * 逐步委托 Regions 内部的 CombatMatchCoordinator」）。调用方（会话、命令、GUI、监听器）
+ * 不需要知道比赛模型；需要比赛细节时用 [participants]、[result]、[membership]。
+ */
 class CombatModeService(private val plugin: RegionsPlugin) {
-    private val states: ConcurrentHashMap<String, CombatState> = ConcurrentHashMap()
-    private val endingRegions: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private val pendingRespawnRestores: ConcurrentHashMap<UUID, GearSnapshot> = ConcurrentHashMap()
     private val gearStore = CombatGearStore(plugin)
+    private val matchStore = MatchStore(File(plugin.dataFolder, "matches.yml"), plugin.log())
+    private val coordinator = CombatMatchCoordinator(plugin, gearStore, matchStore)
 
     init {
         gearStore.load()
+        matchStore.reload()
     }
 
-    @Synchronized
-    fun onEnter(player: Player, region: RegionDefinition): Boolean {
-        if (!isCombatMode(region)) {
-            return false
-        }
-        if (endingRegions.contains(region.id)) {
-            plugin.sendGame(player, plugin.gameText("game.combat.restoring", mapOf("name" to region.name)))
-            return false
-        }
-        val state = state(region)
-        if (state.active) {
-            plugin.sendGame(player, plugin.gameText("game.combat.in-progress", mapOf("name" to region.name)))
-            return false
-        }
-        val maxPlayers = maxPlayers(region)
-        if (maxPlayers > 0 && !state.players.contains(player.uniqueId) && state.players.size >= maxPlayers) {
-            plugin.sendGame(player, plugin.gameText("game.combat.full", mapOf("name" to region.name)))
-            return false
-        }
-        state.players.add(player.uniqueId)
-        state.ready.remove(player.uniqueId)
-        if (!state.active && canPromptReady(region, state)) {
-            if (requireReady(region)) {
-                promptReady(region, state)
-            } else {
-                start(region, state)
-            }
-        }
-        return true
-    }
+    // ------------------------------------------------------------ 会话入口
 
-    @Synchronized
-    fun onLeave(player: Player, regionId: String, reason: String) {
-        val state = states[regionId] ?: return
-        state.players.remove(player.uniqueId)
-        state.ready.remove(player.uniqueId)
-        restoreGear(player, state, teleportOut = true, reason = reason)
-        if (state.active) {
-            maybeEndAfterRosterChange(state, "players-left")
-        } else if (plugin.regions().find(regionId)?.let { !canPromptReady(it, state) } == true) {
-            state.prompted = false
-        }
-        if (state.players.isEmpty() && state.gear.isEmpty()) {
-            states.remove(regionId)
-        }
-    }
+    fun onEnter(player: Player, region: RegionDefinition): Boolean = coordinator.onEnter(player, region)
 
-    @Synchronized
-    fun ready(player: Player, regionId: String): Boolean {
-        val region = plugin.regions().find(regionId) ?: return false
-        if (!isCombatMode(region)) {
-            plugin.sendGame(player, plugin.gameText("game.combat.not-combat"))
-            return true
-        }
-        val state = state(region)
-        if (!state.players.contains(player.uniqueId)) {
-            plugin.sendGame(player, plugin.gameText("game.combat.not-inside"))
-            return true
-        }
-        if (state.active) {
-            plugin.sendGame(player, plugin.gameText("game.combat.already-started"))
-            return true
-        }
-        state.ready.add(player.uniqueId)
-        broadcast(state, plugin.gameText("game.combat.ready", mapOf("player" to player.name, "current" to state.ready.size.toString(), "total" to state.players.size.toString())))
-        if (!canPromptReady(region, state)) {
-            plugin.sendGame(player, startRequirementMessage(region, state))
-            return true
-        }
-        if (state.ready.containsAll(state.players)) {
-            start(region, state)
-        }
-        return true
-    }
+    fun onLeave(player: Player, regionId: String, reason: String) = coordinator.onLeave(player, regionId, reason)
 
-    @Synchronized
-    fun forceEnd(regionId: String, reason: String): Boolean {
-        if (!states.containsKey(regionId)) {
-            return false
-        }
-        end(regionId, reason)
-        return true
-    }
+    /** 断线/踢出：正式战斗中立即弃权，候场阶段退报名。 */
+    fun onDisconnect(player: Player, reason: String) = coordinator.onDisconnect(player, reason)
 
-    @Synchronized
-    fun onDeath(event: PlayerDeathEvent): Boolean {
-        val player = event.entity
-        val state = states.values.firstOrNull { it.players.contains(player.uniqueId) && it.active } ?: return false
-        val snapshot = state.gear.remove(player.uniqueId)
-        if (snapshot != null) {
-            pendingRespawnRestores[player.uniqueId] = snapshot
-            event.drops.clear()
-            event.droppedExp = 0
-        }
-        state.players.remove(player.uniqueId)
-        state.ready.remove(player.uniqueId)
-        plugin.sendGame(player, plugin.gameText("game.combat.removed"))
-        maybeEndAfterRosterChange(state, "death")
-        return true
-    }
+    fun ready(player: Player, regionId: String): Boolean = coordinator.ready(player, regionId)
 
-    @Synchronized
-    fun onRespawn(event: PlayerRespawnEvent) {
-        val snapshot = pendingRespawnRestores.remove(event.player.uniqueId) ?: return
-        restoreSnapshot(event.player, snapshot)
-        snapshot.respawn?.let { event.respawnLocation = it }
-    }
+    fun forceEnd(regionId: String, reason: String): Boolean = coordinator.forceEnd(regionId, reason)
 
-    @Synchronized
-    fun cleanupAll(reason: String, shuttingDown: Boolean = false) {
-        val immediate = !plugin.regionScheduler().isFolia
-        for (regionId in states.keys.toList()) {
-            end(regionId, reason, immediate = immediate, restorePlayers = !shuttingDown || immediate)
-        }
-        for ((playerId, snapshot) in pendingRespawnRestores.toMap()) {
-            val player = plugin.server.getPlayer(playerId) ?: continue
-            val restore = Runnable {
-                restoreSnapshot(player, snapshot)
-                pendingRespawnRestores.remove(playerId)
-            }
-            if (immediate) restore.run()
-            else if (!shuttingDown) plugin.regionScheduler().runAtEntity(player, restore)
-        }
-        for (playerId in gearStore.allPlayerIds()) {
-            val player = plugin.server.getPlayer(playerId) ?: continue
-            val restore = Runnable {
-                restoreStored(player, "cleanup-all:$reason")
-            }
-            if (immediate) restore.run()
-            else if (!shuttingDown) plugin.regionScheduler().runAtEntity(player, restore)
-        }
-        if (shuttingDown) pendingRespawnRestores.clear()
-    }
+    fun onDeath(event: PlayerDeathEvent): Boolean = coordinator.onDeath(event)
 
-    @Synchronized
-    fun restoreIfPending(player: Player, reason: String): Boolean =
-        restoreStored(player, reason)
+    fun onRespawn(event: PlayerRespawnEvent) = coordinator.onRespawn(event)
 
-    @Synchronized
-    fun status(regionId: String): String {
-        val state = states[regionId] ?: return "idle"
-        val region = plugin.regions().find(regionId)
-        val unions = if (region?.mode?.type.equals("union_war", ignoreCase = true)) " unions=${unionIds(state).size}" else ""
-        return if (state.active) "active players=${state.players.size}$unions" else "waiting ready=${state.ready.size}/${state.players.size}$unions"
-    }
+    fun cleanupAll(reason: String, shuttingDown: Boolean = false) = coordinator.cleanupAll(reason, shuttingDown)
 
-    @Synchronized
-    private fun start(region: RegionDefinition, state: CombatState) {
-        if (state.active) {
-            return
-        }
-        val funding = plugin.rewards().reserve(region)
-        if (!funding.successful) {
-            plugin.log().warn("Could not reserve Contract funding for ${region.id} (${funding.code}): ${funding.detail}")
-            broadcast(state, plugin.gameText("game.combat.not-ready"))
-            return
-        }
-        state.active = true
-        state.ready.clear()
-        state.prompted = false
-        val replaceGear = shouldReplaceGear(region)
-        for (playerId in state.players.toList()) {
-            val player = plugin.server.getPlayer(playerId) ?: continue
-            plugin.regionScheduler().runAtEntity(player, Runnable {
-                if (states[region.id] !== state || !state.active || !state.players.contains(playerId)) {
-                    return@Runnable
-                }
-                runCatching {
-                    if (replaceGear && !state.gear.containsKey(playerId)) {
-                        val snapshot = GearSnapshot.capture(player, outsideLocation(region))
-                        val previous = state.gear.putIfAbsent(playerId, snapshot)
-                        if (previous == null) {
-                            gearStore.put(playerId, region.id, snapshot)
-                            applyKit(player, region)
-                        }
-                    }
-                    plugin.sendGame(player, plugin.gameText("game.combat.started"))
-                    plugin.triggers().fire(RegionTrigger.ON_MODE_START, player, region)
-                }.onFailure { error ->
-                    plugin.log().severe("Failed to start combat ${region.id} for ${player.name}: ${error.message}")
-                    end(region.id, "start-failed")
-                }
-            })
-        }
-    }
+    fun restoreIfPending(player: Player, reason: String): Boolean = coordinator.restoreIfPending(player, reason)
 
-    @Synchronized
-    private fun end(
-        regionId: String,
-        reason: String,
-        immediate: Boolean = !plugin.regionScheduler().isFolia,
-        restorePlayers: Boolean = true,
-        winnerCandidates: Set<UUID> = emptySet(),
-    ) {
-        val state = states[regionId] ?: return
-        state.active = false
-        endingRegions.add(regionId)
-        states.remove(regionId, state)
-        val region = plugin.regions().find(regionId)
-        if (region != null) {
-            val funding = if (winnerCandidates.isEmpty()) {
-                plugin.rewards().refund(region, reason)
-            } else {
-                plugin.rewards().settle(region, winnerCandidates)
-            }
-            if (!funding.successful) {
-                plugin.log().severe("Contract funding for $regionId was not finalized (${funding.code}): ${funding.detail}")
-            }
-        }
-        plugin.audit().record(
-            null,
-            regionId,
-            "mode.combat.end",
-            reason,
-            mapOf(
-                "revision" to (region?.publishedRevision?.toString() ?: "unknown"),
-                "participants" to state.players.size.toString(),
-                "mode" to (region?.mode?.type ?: "unknown"),
-            ),
-        )
-        if (restorePlayers) {
-            val players = (state.players + state.gear.keys).toSet()
-                .mapNotNull { plugin.server.getPlayer(it) }
-            val remaining = AtomicInteger(players.size)
-            if (players.isEmpty()) endingRegions.remove(regionId)
-            for (player in players) {
-                val restore = Runnable {
-                    try {
-                        if (region != null) {
-                            plugin.triggers().fire(RegionTrigger.ON_MODE_END, player, region)
-                        }
-                        plugin.effects().cleanupModeEffects(player, regionId, "mode-end:$reason")
-                        restoreGear(player, state, teleportOut = true, reason = reason)
-                        plugin.sendGame(player, plugin.gameText("game.combat.ended"))
-                    } finally {
-                        if (remaining.decrementAndGet() == 0) endingRegions.remove(regionId)
-                    }
-                }
-                runCatching {
-                    if (immediate) restore.run() else plugin.regionScheduler().runAtEntity(player, restore)
-                }.onFailure {
-                    plugin.log().severe("Failed to schedule combat cleanup for ${player.name} in $regionId: ${it.message}")
-                    if (!immediate && remaining.decrementAndGet() == 0) endingRegions.remove(regionId)
-                }
-            }
-        } else {
-            endingRegions.remove(regionId)
-        }
-    }
+    fun status(regionId: String): GameStatus = coordinator.status(regionId)
 
-    private fun restoreGear(player: Player, state: CombatState, teleportOut: Boolean, reason: String) {
-        val snapshot = state.gear.remove(player.uniqueId) ?: return
-        restoreSnapshot(player, snapshot)
-        if (teleportOut) {
-            snapshot.respawn?.let { plugin.regionScheduler().teleportAsync(player, it) }
-        }
-        plugin.log().debug("Restored combat gear for ${player.name} in ${state.regionId}: $reason")
-    }
+    fun isEnding(regionId: String): Boolean = coordinator.isEnding(regionId)
 
-    private fun restoreSnapshot(player: Player, snapshot: GearSnapshot) {
-        player.inventory.contents = snapshot.contents
-        player.inventory.armorContents = snapshot.armor
-        player.inventory.setItemInOffHand(snapshot.offhand)
-        player.level = snapshot.level
-        player.exp = snapshot.exp
-        player.gameMode = snapshot.gameMode
-        player.updateInventory()
-        gearStore.take(player.uniqueId)
-    }
+    fun isCombatMode(region: RegionDefinition): Boolean = coordinator.isCombatMode(region)
 
-    private fun restoreStored(player: Player, reason: String): Boolean {
-        val stored = gearStore.take(player.uniqueId) ?: return false
-        player.inventory.contents = stored.contents
-        player.inventory.armorContents = stored.armor
-        player.inventory.setItemInOffHand(stored.offhand)
-        player.level = stored.level
-        player.exp = stored.exp
-        player.gameMode = stored.gameMode
-        player.updateInventory()
-        stored.respawn?.let { plugin.regionScheduler().teleportAsync(player, it) }
-        plugin.log().warn("Restored persisted combat escrow for ${player.name}: $reason")
-        return true
-    }
+    /** 装备是否仍在托管中（比赛中或等待恢复）；托管期间不得丢弃/拾取临时装备。 */
+    fun isGearEscrowed(playerId: UUID): Boolean = coordinator.isGearEscrowed(playerId)
 
-    private fun applyKit(player: Player, region: RegionDefinition) {
-        player.inventory.clear()
-        player.inventory.armorContents = arrayOfNulls(4)
-        player.inventory.setItemInOffHand(null)
-        val kit = parseItems(region.mode?.values?.get("kit"))
-        for (item in kit) {
-            player.inventory.addItem(item)
-        }
-        val armor = parseItems(region.mode?.values?.get("armor")).take(4)
-        val armorContents = arrayOfNulls<ItemStack>(4)
-        for (index in armor.indices) {
-            armorContents[index] = armor[index]
-        }
-        player.inventory.armorContents = armorContents
-        parseItems(region.mode?.values?.get("offhand")).firstOrNull()?.let { player.inventory.setItemInOffHand(it) }
-        player.updateInventory()
-    }
+    // ------------------------------------------------------------ 报名与观战
 
-    private fun parseItems(value: String?): List<ItemStack> {
-        if (value.isNullOrBlank()) {
-            return emptyList()
-        }
-        return value.split(',', ';')
-            .mapNotNull { raw ->
-                val parts = raw.trim().split(':')
-                val material = Material.matchMaterial(parts[0].trim().uppercase()) ?: return@mapNotNull null
-                val amount = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 64) ?: 1
-                ItemStack(material, amount)
-            }
-    }
+    fun join(player: Player, regionId: String, teamId: String? = null): JoinResult =
+        coordinator.join(player, regionId, teamId)
 
-    private fun shouldReplaceGear(region: RegionDefinition): Boolean {
-        val values = region.mode?.values ?: return false
-        return values["replace-gear"]?.toBooleanStrictOrNull() == true ||
-            !values["kit"].isNullOrBlank() ||
-            !values["armor"].isNullOrBlank() ||
-            !values["offhand"].isNullOrBlank()
-    }
+    fun spectate(player: Player, regionId: String): SpectateResult = coordinator.spectate(player, regionId)
 
-    private fun promptReady(region: RegionDefinition, state: CombatState) {
-        if (state.prompted) {
-            return
-        }
-        state.prompted = true
-        broadcast(state, plugin.gameText("game.combat.ready-prompt", mapOf("name" to region.name, "id" to region.id)))
-    }
+    /** 取消准备；返回 false 表示当前不在可准备的等待阶段。 */
+    fun unready(player: Player, regionId: String): Boolean = coordinator.unready(player, regionId)
 
-    private fun canPromptReady(region: RegionDefinition, state: CombatState): Boolean {
-        if (state.players.size < minPlayers(region)) {
-            return false
-        }
-        if (!region.mode?.type.equals("union_war", ignoreCase = true)) {
-            return true
-        }
-        return unionIds(state).size >= minUnions(region)
-    }
+    /** 明确退出/弃权；返回 false 表示这名玩家本来就不在这场比赛里。 */
+    fun leave(player: Player, regionId: String): Boolean = coordinator.leave(player, regionId)
 
-    private fun startRequirementMessage(region: RegionDefinition, state: CombatState): String {
-        if (state.players.size < minPlayers(region)) {
-            return plugin.gameText("game.combat.waiting-players", mapOf("current" to state.players.size.toString(), "required" to minPlayers(region).toString()))
-        }
-        if (region.mode?.type.equals("union_war", ignoreCase = true)) {
-            return plugin.gameText("game.combat.waiting-unions", mapOf("required" to minUnions(region).toString(), "current" to unionIds(state).size.toString()))
-        }
-        return plugin.gameText("game.combat.not-ready")
-    }
+    /** 场地主选定工会战本场双方；失败返回 false（不是 Nation 战、已开局或已有报名者）。 */
+    fun selectTeams(regionId: String, nationA: String, nationB: String, nameA: String? = null, nameB: String? = null): Boolean =
+        coordinator.selectTeams(regionId, nationA, nationB, nameA, nameB)
 
-    private fun maybeEndAfterRosterChange(state: CombatState, reason: String) {
-        val region = plugin.regions().find(state.regionId) ?: run {
-            end(state.regionId, reason)
-            return
-        }
-        if (state.players.size < minPlayers(region)) {
-            end(state.regionId, reason, winnerCandidates = state.players.toSet())
-            return
-        }
-        if (region.mode?.type.equals("union_war", ignoreCase = true)) {
-            val unions = unionIds(state)
-            if (unions.size <= 1) {
-                val winner = unions.firstOrNull()
-                if (winner != null) {
-                    broadcast(state, plugin.gameText("game.combat.union-winner", mapOf("union" to winner)))
-                }
-                end(state.regionId, reason, winnerCandidates = state.players.toSet())
-            }
-        }
-    }
+    fun selectedTeams(regionId: String): Pair<String?, String?> = coordinator.selectedTeams(regionId)
 
-    private fun broadcast(state: CombatState, message: String) {
-        for (playerId in state.players) {
-            val player = plugin.server.getPlayer(playerId) ?: continue
-            plugin.regionScheduler().runAtEntity(player, Runnable {
-                plugin.sendGame(player, message)
-            })
-        }
-    }
+    // ------------------------------------------------------------ 查询
 
-    private fun state(region: RegionDefinition): CombatState =
-        states.computeIfAbsent(region.id) { CombatState(region.id) }
+    fun membership(playerId: UUID) = coordinator.membership(playerId)
 
-    private fun minPlayers(region: RegionDefinition?): Int =
-        region?.mode?.values?.get("min-players")?.toIntOrNull()?.coerceAtLeast(1)
-            ?: if (region?.mode?.type.equals("dual_pvp", ignoreCase = true)) 2 else 2
+    /** 伤害隔离判定；[playerSourced] 为 false 时表示生物/环境伤害，交回原有规则。 */
+    fun damageDecision(attackerId: UUID?, victimId: UUID, playerSourced: Boolean) =
+        coordinator.damageDecision(attackerId, victimId, playerSourced)
 
-    private fun maxPlayers(region: RegionDefinition): Int =
-        region.mode?.values?.get("max-players")?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+    fun participants(regionId: String): List<MatchParticipant> = coordinator.participants(regionId)
 
-    private fun minUnions(region: RegionDefinition): Int =
-        region.mode?.values?.get("min-unions")?.toIntOrNull()?.coerceAtLeast(2) ?: 2
+    fun result(regionId: String): MatchResult? = coordinator.result(regionId)
 
-    private fun requireReady(region: RegionDefinition): Boolean =
-        region.mode?.values?.get("require-ready")?.toBooleanStrictOrNull() ?: true
+    fun spectatorIds(regionId: String): Set<UUID> = coordinator.spectatorIds(regionId)
 
-    private fun unionIds(state: CombatState): Set<String> {
-        val provider = plugin.unions().active() ?: return emptySet()
-        return state.players
-            .mapNotNull { playerId -> provider.getUnion(playerId)?.id }
-            .toSet()
-    }
+    /** 启动/重载后的比赛恢复：中止未完成的比赛并逐人恢复装备。 */
+    fun recoverPersisted(reason: String) = coordinator.recoverPersisted(reason)
 
-    private fun outsideLocation(region: RegionDefinition): Location? {
-        val raw = region.mode?.values?.get("respawn") ?: region.mode?.values?.get("outside") ?: return null
-        val parts = raw.split(',')
-        if (parts.size < 4) {
-            return null
-        }
-        val world = plugin.server.getWorld(parts[0].trim()) ?: return null
-        val x = parts[1].trim().toDoubleOrNull() ?: return null
-        val y = parts[2].trim().toDoubleOrNull() ?: return null
-        val z = parts[3].trim().toDoubleOrNull() ?: return null
-        val yaw = parts.getOrNull(4)?.trim()?.toFloatOrNull() ?: 0.0f
-        val pitch = parts.getOrNull(5)?.trim()?.toFloatOrNull() ?: 0.0f
-        return Location(world, x, y, z, yaw, pitch)
-    }
+    /** 计时驱动；[RegionsPlugin] 的看门狗会兜底调用。 */
+    fun tick() = coordinator.tick()
 
-    fun isCombatMode(region: RegionDefinition): Boolean =
-        region.mode?.type.equals("dual_pvp", ignoreCase = true) ||
-            region.mode?.type.equals("union_war", ignoreCase = true)
-
-    private class CombatState(val regionId: String) {
-        val players: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
-        val ready: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
-        val gear: ConcurrentHashMap<UUID, GearSnapshot> = ConcurrentHashMap()
-        @Volatile
-        var active: Boolean = false
-        @Volatile
-        var prompted: Boolean = false
-    }
-
-    class GearSnapshot(
-        val contents: Array<ItemStack?>,
-        val armor: Array<ItemStack?>,
-        val offhand: ItemStack?,
-        val level: Int,
-        val exp: Float,
-        val gameMode: GameMode,
-        val respawn: Location?,
-    ) {
-        companion object {
-            fun capture(player: Player, respawn: Location?): GearSnapshot =
-                GearSnapshot(
-                    player.inventory.contents.map { it?.clone() }.toTypedArray(),
-                    player.inventory.armorContents.map { it?.clone() }.toTypedArray(),
-                    player.inventory.itemInOffHand.clone(),
-                    player.level,
-                    player.exp,
-                    player.gameMode,
-                    respawn,
-                )
-        }
-    }
+    fun stopTicking() = coordinator.stopTicking()
 }

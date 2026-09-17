@@ -5,8 +5,10 @@ import org.bukkit.Material
 import org.bukkit.entity.Player
 import org.bukkit.inventory.ItemStack
 import org.bukkit.persistence.PersistentDataType
+import org.cubexmc.regions.mode.gameStatusLine
 import org.cubexmc.regions.model.RegionDefinition
 import org.cubexmc.regions.model.RegionLifecycle
+import org.cubexmc.regions.model.ValidationSeverity
 import org.cubexmc.regions.service.RegionOverlapResolver
 
 /** The region list, the per-region hub, and the source binding page. */
@@ -20,24 +22,24 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
         val regions = plugin.authority().visibleRegions(player, plugin.regions().all())
             .map { gui.editable(it.id) ?: it }
             .sortedWith(RegionOverlapResolver.REGION_ORDER)
-        val inventory = Bukkit.createInventory(RegionsHolder(View.MAIN), 54, text.component("gui.main.title"))
+        val inventory = Bukkit.createInventory(RegionsHolder(View.MAIN), 54, text.component(player, "gui.main.title"))
         for ((index, region) in regions.take(45).withIndex()) {
-            inventory.setItem(index, items.region(region))
+            inventory.setItem(index, items.region(player, region))
         }
-        inventory.setItem(45, text.item(Material.WRITABLE_BOOK, "gui.main.create"))
+        inventory.setItem(45, text.item(player, Material.WRITABLE_BOOK, "gui.main.create"))
         if (plugin.authority().isSuperAdmin(player)) {
-            inventory.setItem(47, text.item(Material.COMPASS, "gui.main.reload"))
+            inventory.setItem(47, text.item(player, Material.COMPASS, "gui.main.reload"))
         }
-        inventory.setItem(49, text.item(Material.MAP, "gui.main.count", mapOf("count" to regions.size.toString())))
-        inventory.setItem(51, text.item(Material.SPYGLASS, "gui.main.doctor"))
-        inventory.setItem(53, text.named(GuiIcons.CLOSE, text.text("gui.common.close")))
+        inventory.setItem(49, text.item(player, Material.MAP, "gui.main.count", mapOf("count" to regions.size.toString())))
+        inventory.setItem(51, text.item(player, Material.SPYGLASS, "gui.main.doctor"))
+        inventory.setItem(53, text.named(GuiIcons.CLOSE, text.text(player, "gui.common.close")))
         player.openInventory(inventory)
     }
 
     fun clickMain(player: Player, item: ItemStack?, slot: Int) {
         when (slot) {
             53 -> return player.closeInventory()
-            45 -> return gui.promptCreateRegion(player)
+            45 -> return gui.creation.openModePicker(player)
             47 -> return reload(player)
             51 -> return runDoctor(player)
         }
@@ -66,91 +68,211 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
             text.send(
                 player,
                 "gui.doctor.line",
-                mapOf("id" to issue.regionId, "severity" to issue.severity.name, "message" to issue.message),
+                mapOf(
+                    "id" to issue.regionId,
+                    "severity" to text.severityLabel(player, issue.severity),
+                    "message" to text.issueLine(player, issue.code, issue.args, issue.fieldPath, issue.message),
+                ),
             )
         }
     }
 
+    /**
+     * 基础页（PLAN.md §5.2）：只突出场地主日常要用的 5 个操作——玩法设置（含装备与人数）、
+     * 场地点位、检查并发布、比赛管理、隔离试运行。规则组合、临时效果、触发动作、原始 ID、完整
+     * diff、历史、启停与删除都收进 [openDetailAdvanced]，普通页面不再一次摆出十几个入口。
+     */
     fun openDetail(player: Player, regionId: String) {
         val region = gui.editable(regionId) ?: return openMain(player)
         if (!gui.canManageRegion(player, region)) return
+        val draft = plugin.publishing().draft(region.id)
         val inventory = Bukkit.createInventory(
             RegionsHolder(View.DETAIL, region.id),
             54,
-            text.component("gui.detail.title", mapOf("id" to region.id)),
+            text.component(player, "gui.detail.title", mapOf("id" to region.id)),
         )
-        inventory.setItem(4, items.region(region))
-        inventory.setItem(10, text.item(Material.ENDER_EYE, "gui.detail.source", mapOf("source" to region.source.describe())))
+        inventory.setItem(RegionDetailLayout.INFO_SLOT, items.region(player, region))
         inventory.setItem(
-            12,
-            text.item(Material.DIAMOND_SWORD, "gui.detail.mode", mapOf("mode" to (region.mode?.type ?: text.text("gui.common.none")))),
-        )
-        inventory.setItem(14, text.item(Material.OAK_SIGN, "gui.detail.flags", mapOf("count" to region.flags.size.toString())))
-        inventory.setItem(16, text.item(Material.BLAZE_POWDER, "gui.detail.effects", mapOf("count" to region.effects.size.toString())))
-        inventory.setItem(
-            22,
-            text.item(GuiIcons.TRIGGER, "gui.detail.triggers", mapOf("count" to region.triggers.values.sumOf { it.size }.toString())),
-        )
-        inventory.setItem(24, text.item(Material.KNOWLEDGE_BOOK, "gui.detail.apply-template"))
-        inventory.setItem(
-            28,
-            text.named(
-                if (region.enabled) Material.REDSTONE_TORCH else Material.LEVER,
-                text.text(if (region.enabled) "gui.detail.disable" else "gui.detail.enable"),
+            RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(0),
+            text.item(
+                player,
+                Material.DIAMOND_SWORD,
+                "gui.detail.mode",
+                mapOf("mode" to plugin.lang().label("labels.mode." + (region.mode?.type ?: ""), region.mode?.type ?: text.text(player, "gui.common.none"))),
             ),
         )
-        inventory.setItem(30, text.item(Material.WRITABLE_BOOK, "gui.detail.validate"))
-        inventory.setItem(32, text.item(Material.MILK_BUCKET, "gui.detail.cleanup"))
-        inventory.setItem(36, text.item(Material.LAVA_BUCKET, "gui.detail.delete"))
-        if (plugin.publishing().draft(region.id) != null) {
-            inventory.setItem(
-                38,
-                text.item(Material.EMERALD, "gui.detail.publish", mapOf("revision" to region.revision.toString())),
-            )
-        }
-        if (plugin.regions().find(region.id)?.lifecycle == RegionLifecycle.PUBLISHED) {
-            inventory.setItem(40, text.item(Material.PAPER, "gui.detail.withdraw"))
+        inventory.setItem(RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(1), text.item(player, Material.ENDER_EYE, "gui.detail.source", mapOf("source" to region.source.describe())))
+        // 校验结果直接写进"检查并发布"的说明里，避免基础页再摆一个校验按钮。
+        val blocking = if (draft != null) {
+            plugin.publishing().publishingIssues(player, draft).count { it.severity == ValidationSeverity.ERROR }
+        } else {
+            0
         }
         inventory.setItem(
-            42,
-            text.item(Material.BOOK, "gui.detail.history", mapOf("count" to plugin.publishing().history(region.id).size.toString())),
+            RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(2),
+            text.item(
+                player,
+                if (draft == null) GuiIcons.BLOCKED else Material.EMERALD,
+                "gui.detail.publish",
+                mapOf("revision" to region.revision.toString(), "errors" to blocking.toString()),
+                extraLore = if (draft == null) text.lore(player, "gui.detail.publish.no-draft") else emptyList(),
+            ),
         )
-        if (plugin.publishing().draft(region.id) != null) {
-            val active = plugin.trials().active(player.uniqueId)?.regionId == region.id
-            inventory.setItem(
-                44,
-                text.item(
-                    if (active) Material.REDSTONE_BLOCK else Material.SPYGLASS,
-                    if (active) "gui.detail.trial-stop" else "gui.detail.trial-start",
-                ),
-            )
-        }
-        inventory.setItem(34, items.back())
+        inventory.setItem(RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(3), text.item(player, Material.BELL, "gui.detail.manage", mapOf("mode" to (region.mode?.type ?: "-"))))
+        val trialActive = plugin.trials().active(player.uniqueId)?.regionId == region.id
+        inventory.setItem(
+            RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(4),
+            text.item(
+                player,
+                if (trialActive) Material.REDSTONE_BLOCK else Material.SPYGLASS,
+                when {
+                    trialActive -> "gui.detail.trial-stop"
+                    draft == null -> "gui.detail.trial-no-draft"
+                    else -> "gui.detail.trial-start"
+                },
+            ),
+        )
+        inventory.setItem(RegionDetailLayout.ADVANCED_SLOT, text.item(player, Material.COMPARATOR, "gui.detail.advanced"))
+        inventory.setItem(RegionDetailLayout.BACK_SLOT, items.back(player))
         player.openInventory(inventory)
     }
 
     fun clickDetail(player: Player, regionId: String, slot: Int) {
         val region = gui.editable(regionId) ?: return openMain(player)
         when (slot) {
-            10 -> openSource(player, region.id)
-            12 -> gui.openMode(player, region.id)
-            14 -> gui.openFlags(player, region.id)
-            16 -> gui.openEffects(player, region.id)
-            22 -> gui.openTriggers(player, region.id)
-            24 -> gui.openTemplatesForRegion(player, region.id)
-            28 -> gui.saveAndReopen(player, region.copy(enabled = !region.enabled)) { openDetail(player, regionId) }
-            30 -> gui.sendValidation(player, region)
-            32 -> {
+            RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(0) -> gui.openMode(player, region.id)
+            RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(1) -> openSource(player, region.id)
+            RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(2) -> if (plugin.publishing().draft(region.id) == null) {
+                text.send(player, "gui.detail.publish.no-draft")
+            } else {
+                gui.openPublishPreview(player, region.id)
+            }
+
+            RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(3) -> sendMatchSummary(player, region)
+            RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(4) -> if (plugin.trials().active(player.uniqueId)?.regionId == region.id) {
+                toggleTrial(player, region)
+            } else if (plugin.publishing().draft(region.id) == null) {
+                text.send(player, "gui.detail.trial-no-draft")
+            } else {
+                toggleTrial(player, region)
+            }
+
+            RegionDetailLayout.BACK_SLOT -> openMain(player)
+            RegionDetailLayout.ADVANCED_SLOT -> openDetailAdvanced(player, region.id)
+        }
+    }
+
+    /**
+     * 高级页（PLAN.md §5.2）：规则组合、临时效果、触发动作、应用模板、原始 ID 与完整 diff、
+     * 历史版本，以及启用停用、清理、撤回发布与删除这些不常用但必要的入口。
+     */
+    fun openDetailAdvanced(player: Player, regionId: String) {
+        val region = gui.editable(regionId) ?: return openMain(player)
+        if (!gui.canManageRegion(player, region)) return
+        val draft = plugin.publishing().draft(region.id)
+        val inventory = Bukkit.createInventory(
+            RegionsHolder(View.DETAIL_ADVANCED, region.id),
+            54,
+            text.component(player, "gui.advanced.title", mapOf("id" to region.id)),
+        )
+        inventory.setItem(4, items.region(player, region))
+        inventory.setItem(19, text.item(player, Material.OAK_SIGN, "gui.detail.flags", mapOf("count" to region.flags.size.toString())))
+        inventory.setItem(20, text.item(player, Material.BLAZE_POWDER, "gui.detail.effects", mapOf("count" to region.effects.size.toString())))
+        inventory.setItem(
+            21,
+            text.item(player, GuiIcons.TRIGGER, "gui.detail.triggers", mapOf("count" to region.triggers.values.sumOf { it.size }.toString())),
+        )
+        inventory.setItem(22, text.item(player, Material.KNOWLEDGE_BOOK, "gui.detail.apply-template"))
+        if (draft != null) {
+            inventory.setItem(
+                23,
+                text.item(player, Material.WRITABLE_BOOK, "gui.detail.preview-diff", mapOf("revision" to draft.revision.toString())),
+            )
+        }
+        inventory.setItem(
+            24,
+            text.item(player, Material.BOOK, "gui.detail.history", mapOf("count" to plugin.publishing().history(region.id).size.toString())),
+        )
+        inventory.setItem(
+            30,
+            text.named(
+                if (region.enabled) Material.REDSTONE_TORCH else Material.LEVER,
+                text.text(player, if (region.enabled) "gui.detail.disable" else "gui.detail.enable"),
+            ),
+        )
+        inventory.setItem(31, text.item(player, Material.MILK_BUCKET, "gui.detail.cleanup"))
+        if (plugin.regions().find(region.id)?.lifecycle == RegionLifecycle.PUBLISHED) {
+            inventory.setItem(32, text.item(player, Material.PAPER, "gui.detail.withdraw"))
+        }
+        inventory.setItem(40, text.item(player, Material.LAVA_BUCKET, "gui.detail.delete"))
+        inventory.setItem(34, text.item(player, GuiIcons.BACK, "gui.advanced.back"))
+        player.openInventory(inventory)
+    }
+
+    fun clickDetailAdvanced(player: Player, regionId: String, slot: Int) {
+        val region = gui.editable(regionId) ?: return openMain(player)
+        when (slot) {
+            19 -> gui.openFlags(player, region.id)
+            20 -> gui.openEffects(player, region.id)
+            21 -> gui.openTriggers(player, region.id)
+            22 -> gui.openTemplatesForRegion(player, region.id)
+            23 -> gui.openPublishPreview(player, region.id)
+            24 -> gui.sendRevisionHistory(player, region)
+            30 -> gui.saveAndReopen(player, region.copy(enabled = !region.enabled)) { openDetailAdvanced(player, regionId) }
+            31 -> {
                 val count = plugin.sessions().cleanup(player, "gui-cleanup")
                 plugin.lang().send(player, "cleanup-done", mapOf("player" to player.name, "count" to count.toString()))
             }
-            34 -> openMain(player)
-            36 -> promptDelete(player, region)
-            38 -> gui.openPublishPreview(player, region.id)
-            40 -> withdraw(player, region)
-            42 -> gui.sendRevisionHistory(player, region)
-            44 -> toggleTrial(player, region)
+            32 -> withdraw(player, region)
+            34 -> openDetail(player, regionId)
+            40 -> promptDelete(player, region)
         }
+    }
+
+    /**
+     * 比赛管理：把状态、名单、结果与开停赛入口一次性报给场地主。
+     *
+     * 开赛与强制结束走既有命令（它们各自有权限与两步确认），这里只做汇总，不再造一套平行入口。
+     */
+    private fun sendMatchSummary(player: Player, region: RegionDefinition) {
+        val status = when {
+            plugin.raceModes().isRaceMode(region) -> plugin.raceModes().status(region.id)
+            plugin.roundModes().isRoundMode(region) -> plugin.roundModes().status(region.id)
+            else -> plugin.combatModes().status(region.id)
+        }
+        plugin.lang().sendPlain(
+            player,
+            "gui.detail.manage-status",
+            mapOf("id" to region.id, "state" to plugin.gameStatusLine(player, status)),
+        )
+        val participants = if (plugin.combatModes().isCombatMode(region)) {
+            plugin.combatModes().participants(region.id)
+        } else {
+            emptyList()
+        }
+        if (participants.isNotEmpty()) {
+            plugin.lang().sendPlain(
+                player,
+                "gui.detail.manage-roster",
+                mapOf(
+                    "count" to participants.size.toString(),
+                    "players" to participants.joinToString(", ") { "${it.name}(${it.state.name.lowercase()})" },
+                ),
+            )
+        }
+        val result = plugin.combatModes().result(region.id)
+        if (result != null) {
+            plugin.lang().sendPlain(
+                player,
+                "gui.detail.manage-result",
+                mapOf(
+                    "outcome" to plugin.lang().label("labels.outcome.${result.outcome.name.lowercase()}", result.outcome.name.lowercase()),
+                    "reason" to plugin.lang().label(result.reasonKey, result.reasonKey),
+                ),
+            )
+        }
+        plugin.lang().sendPlain(player, "gui.detail.manage-hint", mapOf("id" to region.id))
+        openDetail(player, region.id)
     }
 
     private fun withdraw(player: Player, region: RegionDefinition) {
@@ -158,7 +280,7 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
         if (result.success) {
             text.send(player, "gui.detail.withdrawn", mapOf("id" to region.id))
         } else {
-            text.send(player, "gui.detail.withdraw-failed", mapOf("reason" to result.reason))
+            text.send(player, "gui.detail.withdraw-failed", mapOf("reason" to text.resultReason(player, result.code, result.args, result.reason)))
         }
         openDetail(player, region.id)
     }
@@ -169,7 +291,7 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
         if (result.success) {
             text.send(player, if (active) "gui.trial.stopped" else "gui.trial.started")
         } else {
-            text.send(player, "gui.trial.failed", mapOf("reason" to result.reason))
+            text.send(player, "gui.trial.failed", mapOf("reason" to text.resultReason(player, result.code, result.args, result.reason)))
         }
         openDetail(player, region.id)
     }
@@ -185,7 +307,7 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
             plugin.sessions().cleanupRegionAll(region.id, "gui-delete-${region.id}")
             val result = plugin.regions().remove(region.id)
             if (!result.success) {
-                text.send(player, "gui.delete.failed", mapOf("reason" to result.reason))
+                text.send(player, "gui.delete.failed", mapOf("reason" to text.resultReason(player, result.code, result.args, result.reason)))
             } else {
                 plugin.audit().record(player, region.id, "region.remove", "gui")
                 text.send(player, "gui.delete.ok", mapOf("id" to region.id))
@@ -199,16 +321,16 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
         val inventory = Bukkit.createInventory(
             RegionsHolder(View.SOURCE, region.id),
             27,
-            text.component("gui.source.title", mapOf("id" to region.id)),
+            text.component(player, "gui.source.title", mapOf("id" to region.id)),
         )
-        inventory.setItem(4, items.region(region))
-        inventory.setItem(10, text.item(Material.GRASS_BLOCK, "gui.source.lands", mapOf("source" to region.source.describe())))
+        inventory.setItem(4, items.region(player, region))
+        inventory.setItem(10, text.item(player, Material.GRASS_BLOCK, "gui.source.lands", mapOf("source" to region.source.describe())))
         if (plugin.authority().isSuperAdmin(player)) {
-            inventory.setItem(12, text.item(Material.STONE_AXE, "gui.source.cuboid"))
+            inventory.setItem(12, text.item(player, Material.STONE_AXE, "gui.source.cuboid"))
         }
-        inventory.setItem(14, text.item(Material.NAME_TAG, "gui.source.rename", mapOf("name" to region.name)))
-        inventory.setItem(16, text.item(Material.COMPARATOR, "gui.source.priority", mapOf("priority" to region.priority.toString())))
-        inventory.setItem(22, items.back())
+        inventory.setItem(14, text.item(player, Material.NAME_TAG, "gui.source.rename", mapOf("name" to region.name)))
+        inventory.setItem(16, text.item(player, Material.COMPARATOR, "gui.source.priority", mapOf("priority" to region.priority.toString())))
+        inventory.setItem(22, items.back(player))
         player.openInventory(inventory)
     }
 
@@ -271,4 +393,43 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
             gui.saveAndReopen(player, region.copy(name = name)) { openSource(player, region.id) }
         }
     }
+}
+
+/**
+ * 详情页布局（PLAN.md §5.2：基础页最多突出 5 个操作，高级项收进高级页）。
+ *
+ * 槽位与标签写成常数而不是散落在渲染代码里，是为了让"基础页只有 5 个操作"这条约定**可被测试**：
+ * [RegionDetailLayoutTest] 断言 [BASIC_OPERATIONS] 恰好 5 项、槽位不重复，并且每个标签键在
+ * 中英两个语言文件里都存在。新增第 6 个基础操作会直接让用例失败。
+ */
+internal object RegionDetailLayout {
+
+    /** 基础页的 5 个操作：槽位 → 标签键。 */
+    val BASIC_OPERATIONS: Map<Int, String> = linkedMapOf(
+        20 to "gui.detail.mode",
+        21 to "gui.detail.source",
+        22 to "gui.detail.publish",
+        23 to "gui.detail.manage",
+        24 to "gui.detail.trial-start",
+    )
+
+    const val INFO_SLOT = 4
+    const val BACK_SLOT = 34
+
+    /** 高级页入口：是导航，不计入"5 个操作"。 */
+    const val ADVANCED_SLOT = 40
+
+    /** 高级页上的入口槽位 → 标签键（顺序即渲染顺序）。 */
+    val ADVANCED_ENTRIES: Map<Int, String> = linkedMapOf(
+        19 to "gui.detail.flags",
+        20 to "gui.detail.effects",
+        21 to "gui.detail.triggers",
+        22 to "gui.detail.apply-template",
+        23 to "gui.detail.preview-diff",
+        24 to "gui.detail.history",
+        30 to "gui.detail.enable",
+        31 to "gui.detail.cleanup",
+        32 to "gui.detail.withdraw",
+        40 to "gui.detail.delete",
+    )
 }

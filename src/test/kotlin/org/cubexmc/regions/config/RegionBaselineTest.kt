@@ -37,12 +37,32 @@ class RegionBaselineTest {
     }
 
     @Test
-    fun `no migration steps exist yet, so the first public release is the starting point`() {
-        // 这条会在第一次改格式时失败 —— 那正是提醒:版本号 +1 的同时必须补 addStep。
-        assertTrue(
-            RegionBaseline.plans().all { it.steps().isEmpty() },
-            "baseline plans should have no steps until a format actually changes",
-        )
+    fun `baseline plans carry exactly the migration steps for their format changes`() {
+        // 旧断言是"所有迁移步骤必须为空"，在语言 6→7、模板 1→2 落地时按计划替换：
+        // 每个改过格式的文件必须有对应步骤，且步骤自声明版本区间。
+        for (plan in RegionBaseline.plans()) {
+            when {
+                plan.resourcePath().startsWith("lang/") -> {
+                    // 语言文件是一条单向链：6→7（模板确认 GUI 补键）→ 8（补齐 v7 之后新增的
+                    // labels/errors 等叶子键）。断言整条链，避免以后有人只加版本号不加步骤。
+                    val steps = plan.steps()
+                    assertEquals(
+                        listOf(6 to 7, 7 to 8),
+                        steps.map { it.fromVersion() to it.toVersion() },
+                        plan.resourcePath(),
+                    )
+                    assertTrue(steps[0] is LangV6ToV7Step, plan.resourcePath())
+                    assertTrue(steps[1] is LangV7ToV8Step, plan.resourcePath())
+                }
+                plan.resourcePath() == "templates.yml" -> {
+                    val step = plan.steps().single()
+                    assertEquals(1, step.fromVersion(), plan.resourcePath())
+                    assertEquals(2, step.toVersion(), plan.resourcePath())
+                    assertTrue(step is TemplatesV1ToV2Step, plan.resourcePath())
+                }
+                else -> assertTrue(plan.steps().isEmpty(), plan.resourcePath())
+            }
+        }
     }
 
     @Test

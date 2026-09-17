@@ -133,6 +133,7 @@ class RegionsPlugin : CubexPlugin() {
         modes().register("free_event")
         modes().register("dual_pvp")
         modes().register("union_war")
+        modes().register("free_for_all")
         modes().register("run_race")
         modes().register("boat_race")
         modes().register("horse_race")
@@ -161,8 +162,11 @@ class RegionsPlugin : CubexPlugin() {
         sessionService = RegionSessionService(this, effects())
         detectionService = RegionDetectionService(this)
         flagService = RegionFlagService(this)
-        templateService = RegionTemplateService(File(dataFolder, "templates.yml"))
-        templates().load()
+        templateService = RegionTemplateService(
+            File(dataFolder, "templates.yml"),
+            builtIns = { javaClass.getResourceAsStream("/templates.yml") },
+        )
+        logMergedBuiltInTemplates(templates().load())
         guiService = RegionsGui(this)
         // Every store is a Terminable, so bind() owns shutdown flushing; TerminableRegistry closes
         // them in reverse registration order.
@@ -200,12 +204,33 @@ class RegionsPlugin : CubexPlugin() {
     }
 
     override fun disablePlugin() {
-        combatModes().cleanupAll("plugin-disable", shuttingDown = true)
-        roundModes().cleanupAll("plugin-disable", shuttingDown = true)
-        raceModes().cleanupAll("plugin-disable", shuttingDown = true)
-        trials().cleanupAll("plugin-disable", shuttingDown = true)
-        sessions().cleanupAll("plugin-disable", shuttingDown = true)
-        storage().flushIfDirty()
+        runShutdownCleanup()
+    }
+
+    /**
+     * enablePlugin 可能在任意一步抛错——onEnable 失败后 Bukkit 仍会调用 onDisable，
+     * 此时上面的访问器（combatModes() 等）会因服务未构造而抛 IllegalStateException，
+     * 把一次启动失败放大成关闭阶段的二次报错。这里直接走可空字段，按实际初始化状态清理；
+     * 每步独立兜底，一步失败不影响其余清理。
+     *
+     * internal 是给 [RegionsPluginLifecycleTest] 的测试缝：disablePlugin 本身保持 protected。
+     */
+    internal fun runShutdownCleanup() {
+        shutdownStep("combat-modes") { combatModeService?.cleanupAll("plugin-disable", shuttingDown = true) }
+        shutdownStep("combat-timers") { combatModeService?.stopTicking() }
+        shutdownStep("round-modes") { roundModeService?.cleanupAll("plugin-disable", shuttingDown = true) }
+        shutdownStep("race-modes") { raceModeService?.cleanupAll("plugin-disable", shuttingDown = true) }
+        shutdownStep("trials") { trialService?.cleanupAll("plugin-disable", shuttingDown = true) }
+        shutdownStep("sessions") { sessionService?.cleanupAll("plugin-disable", shuttingDown = true) }
+        shutdownStep("storage-flush") { regionStorage?.flushIfDirty() }
+    }
+
+    private fun shutdownStep(name: String, action: Runnable) {
+        try {
+            action.run()
+        } catch (failure: Exception) {
+            log().severe("Regions shutdown step '$name' failed: ${failure.message}")
+        }
     }
 
     /**
@@ -239,7 +264,7 @@ class RegionsPlugin : CubexPlugin() {
                 unions().setPreferred(config.getString("integrations.union-provider", "lands") ?: "lands")
             })
             .add("language", lang())
-            .add("templates", templates())
+            .add("templates", Reloadable { logMergedBuiltInTemplates(templates().load()) })
             .add("regions", storage())
             .add("funding-store", fundingStore())
             .add("lifecycle", Reloadable { lifecycle().reconcile() })
@@ -248,6 +273,7 @@ class RegionsPlugin : CubexPlugin() {
                     log().warn("Reward funding recovery remains pending (${it.code}): ${it.detail}")
                 }
             })
+            .add("menu-refresh", Reloadable { guiService?.refreshOpenMenus() })
             .add("timers", Reloadable {
                 scheduleWatchdog()
                 scheduleEffectRefresh()
@@ -274,6 +300,19 @@ class RegionsPlugin : CubexPlugin() {
         roundModes().cleanupAll("reload")
         raceModes().cleanupAll("reload")
         sessions().cleanupAll("reload")
+    }
+
+/**
+     * 升级安装的 `templates.yml` 里不会有后来新增的内置模板，而 `saveIfMissing` 只在文件缺失时
+     * 写入——不补进来的话，新玩法在 GUI 里根本没有创建入口。这里只补进内存并明确告知服主
+     * 文件未被改动（PLAN.md §8.5：不覆盖服主内容）。
+     */
+    private fun logMergedBuiltInTemplates(added: List<String>) {
+        if (added.isEmpty()) return
+        log().info(
+            "Loaded ${added.size} built-in template(s) that are missing from templates.yml: " +
+                "${added.joinToString(", ")}. They are available immediately; templates.yml itself was not modified.",
+        )
     }
 
     private fun warnOnValidationIssues() {
@@ -422,6 +461,8 @@ class RegionsPlugin : CubexPlugin() {
                 lifecycle().reconcile()
                 detection().updateAllOnline()
                 sessions().watchdog()
+                // 比赛计时由协调器自己的 1 秒任务驱动；看门狗只是兜底，避免任务被外部取消后卡住判定。
+                combatModes().tick()
             },
             periodTicks,
             periodTicks,
@@ -453,6 +494,10 @@ class RegionsPlugin : CubexPlugin() {
     }
 
     private fun restoreOnlinePlayersAfterEnable() {
+        // 先处理重启前未收尾的比赛：中止半局、逐人恢复装备；离线选手的记录会保留下来，
+        // 等他们登录时由 restoreIfPending 继续（PLAN.md §6.2）。
+        runCatching { combatModes().recoverPersisted("enable-recovery") }
+            .onFailure { log().severe("Failed to recover unfinished matches: ${it.message}") }
         for (player in server.onlinePlayers.toList()) {
             regionScheduler().runAtEntity(player, Runnable {
                 effects().restoreIfPending(player, "enable-recovery")

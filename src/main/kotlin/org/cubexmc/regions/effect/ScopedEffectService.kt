@@ -102,7 +102,10 @@ class ScopedEffectService(private val plugin: RegionsPlugin) {
         val failed = failure
         if (failed == null && persisted) return ServiceResult.ok()
         cleanupDeclaredEffects(player, "declared-set-rollback")
-        return failed ?: ServiceResult.fail("Unable to persist the effect escrow for the resolved set.")
+        return failed ?: ServiceResult.failCoded(
+            "effect-escrow-persist-failed",
+            diagnostic = "Unable to persist the effect escrow for the resolved set.",
+        )
     }
 
     private fun applyInternal(
@@ -112,7 +115,11 @@ class ScopedEffectService(private val plugin: RegionsPlugin) {
         leaseMetadata: Map<String, String>,
     ): ServiceResult {
         if (!isRegistered(config.type)) {
-            return ServiceResult.fail("Unknown effect type ${config.type}")
+            return ServiceResult.failCoded(
+                "effect-unknown-type",
+                mapOf("type" to config.type),
+                "Unknown effect type ${config.type}",
+            )
         }
         val result = when (config.type.lowercase(Locale.ROOT)) {
             "scale" -> applyScale(player, region, config, leaseMetadata)
@@ -122,7 +129,11 @@ class ScopedEffectService(private val plugin: RegionsPlugin) {
             "fly_speed" -> applyFlySpeed(player, region, config, leaseMetadata)
             "glowing" -> applyGlowing(player, region, config, leaseMetadata)
             "invisibility_suppression" -> applyInvisibilitySuppression(player, region, config, leaseMetadata)
-            else -> ServiceResult.fail("Effect ${config.type} is registered but not implemented yet.")
+            else -> ServiceResult.failCoded(
+                "effect-not-implemented",
+                mapOf("type" to config.type),
+                "Effect ${config.type} is registered but not implemented yet.",
+            )
         }
         if (!result.success) {
             plugin.log().warn("Failed to apply effect ${config.type} to ${player.name} in ${region.id}: ${result.reason}")
@@ -244,17 +255,27 @@ class ScopedEffectService(private val plugin: RegionsPlugin) {
     private fun restoreKnownPlayer(player: Player, leaseId: UUID): ServiceResult {
         val lease = leases[leaseId] ?: return ServiceResult.ok()
         if (lease.playerId != player.uniqueId) {
-            return ServiceResult.fail("Effect lease player mismatch.")
+            return ServiceResult.failCoded(
+                "effect-lease-player-mismatch",
+                diagnostic = "Effect lease player mismatch.",
+            )
         }
         val restored = runCatching { restore(player, lease) }
             .getOrElse { error ->
-                ServiceResult.fail("Unable to restore ${lease.effectType}: ${error.message}")
+                ServiceResult.failCoded(
+                    "effect-restore-failed",
+                    mapOf("type" to lease.effectType),
+                    "Unable to restore ${lease.effectType}: ${error.message}",
+                )
             }
         if (!restored.success) return restored
         if (!leases.remove(lease.id, lease)) return ServiceResult.ok()
         if (persistLeases()) return ServiceResult.ok()
         leases[lease.id] = lease
-        return ServiceResult.fail("Effect was restored, but its escrow record could not be removed.")
+        return ServiceResult.failCoded(
+            "effect-escrow-clear-failed",
+            diagnostic = "Effect was restored, but its escrow record could not be removed.",
+        )
     }
 
     private fun applyScale(
@@ -264,12 +285,20 @@ class ScopedEffectService(private val plugin: RegionsPlugin) {
         leaseMetadata: Map<String, String>,
     ): ServiceResult {
         val value = config.values["value"]?.toDoubleOrNull()
-            ?: return ServiceResult.fail("scale effect requires value.")
+            ?: return ServiceResult.failCoded(
+                "effect-parameter-required",
+                mapOf("type" to "scale", "parameter" to "value"),
+                "scale effect requires value.",
+            )
         val minScale = plugin.config.getDouble("effects.scale.min", 0.1)
         val maxScale = plugin.config.getDouble("effects.scale.max", 4.0)
         val safeValue = min(max(value, minScale), maxScale)
         val instance = scaleAttributeInstance(player)
-            ?: return ServiceResult.fail("Current server does not expose the scale attribute.")
+            ?: return ServiceResult.failCoded(
+                "effect-attribute-unavailable",
+                mapOf("type" to "scale"),
+                "Current server does not expose the scale attribute.",
+            )
         val previous = instance.baseValue
         val lease = createLease(
             player,
@@ -298,9 +327,17 @@ class ScopedEffectService(private val plugin: RegionsPlugin) {
         leaseMetadata: Map<String, String>,
     ): ServiceResult {
         val name = config.values["effect"] ?: config.values["name"]
-            ?: return ServiceResult.fail("potion effect requires effect.")
+            ?: return ServiceResult.failCoded(
+                "effect-parameter-required",
+                mapOf("type" to "potion", "parameter" to "effect"),
+                "potion effect requires effect.",
+            )
         val type = resolvePotionEffect(name)
-            ?: return ServiceResult.fail("Unknown potion effect $name.")
+            ?: return ServiceResult.failCoded(
+                "effect-potion-unknown",
+                mapOf("effect" to name),
+                "Unknown potion effect $name.",
+            )
         val previous = player.getPotionEffect(type)
         val duration = config.values["duration-ticks"]?.toIntOrNull()
             ?: plugin.config.getInt("effects.default-duration-ticks", 400)
@@ -383,7 +420,11 @@ class ScopedEffectService(private val plugin: RegionsPlugin) {
         leaseMetadata: Map<String, String>,
     ): ServiceResult {
         val value = config.values["value"]?.toFloatOrNull()
-            ?: return ServiceResult.fail("walk_speed effect requires value.")
+            ?: return ServiceResult.failCoded(
+                "effect-parameter-required",
+                mapOf("type" to "walk_speed", "parameter" to "value"),
+                "walk_speed effect requires value.",
+            )
         val snapshot = PlayerStateSnapshot(mapOf("walkSpeed" to player.walkSpeed.toString()))
         player.walkSpeed = value.coerceIn(-1.0f, 1.0f)
         return trackApplied(player, createLease(player, region, config, "walk_speed", snapshot, leaseMetadata))
@@ -396,7 +437,11 @@ class ScopedEffectService(private val plugin: RegionsPlugin) {
         leaseMetadata: Map<String, String>,
     ): ServiceResult {
         val value = config.values["value"]?.toFloatOrNull()
-            ?: return ServiceResult.fail("fly_speed effect requires value.")
+            ?: return ServiceResult.failCoded(
+                "effect-parameter-required",
+                mapOf("type" to "fly_speed", "parameter" to "value"),
+                "fly_speed effect requires value.",
+            )
         val snapshot = PlayerStateSnapshot(mapOf("flySpeed" to player.flySpeed.toString()))
         player.flySpeed = value.coerceIn(-1.0f, 1.0f)
         return trackApplied(player, createLease(player, region, config, "fly_speed", snapshot, leaseMetadata))
@@ -450,9 +495,15 @@ class ScopedEffectService(private val plugin: RegionsPlugin) {
         leases.remove(lease.id)
         val rollback = runCatching { restore(player, lease) }
         return if (rollback.isSuccess) {
-            ServiceResult.fail("Unable to persist effect escrow; the effect was rolled back.")
+            ServiceResult.failCoded(
+                "effect-escrow-persist-failed",
+                diagnostic = "Unable to persist effect escrow; the effect was rolled back.",
+            )
         } else {
-            ServiceResult.fail("Unable to persist effect escrow and rollback failed: ${rollback.exceptionOrNull()?.message}")
+            ServiceResult.failCoded(
+                "effect-escrow-rollback-failed",
+                diagnostic = "Unable to persist effect escrow and rollback failed: ${rollback.exceptionOrNull()?.message}",
+            )
         }
     }
 

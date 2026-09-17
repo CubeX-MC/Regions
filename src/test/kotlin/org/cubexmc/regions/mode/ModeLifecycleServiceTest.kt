@@ -8,6 +8,7 @@ import org.cubexmc.core.CubexLogger
 import org.cubexmc.regions.RegionsPlugin
 import org.cubexmc.regions.config.LanguageManager
 import org.cubexmc.regions.effect.ScopedEffectService
+import org.cubexmc.regions.match.JoinResult
 import org.cubexmc.regions.model.ModeConfig
 import org.cubexmc.regions.model.RegionDefinition
 import org.cubexmc.regions.model.RegionSourceRef
@@ -56,20 +57,20 @@ class ModeLifecycleServiceTest {
 
         service.onEnter(player, region)
         assertTrue(service.ready(player, region.id))
-        assertTrue(service.status(region.id).startsWith("race active"))
+        assertEquals(GamePhase.RUNNING, service.status(region.id).phase)
         val firstTimeout = harness.delayed.single { it.delay == 40L }.task
 
         assertTrue(service.forceEnd(region.id, "test-restart"))
         service.onEnter(player, region)
         assertTrue(service.ready(player, region.id))
-        assertTrue(service.status(region.id).startsWith("race active"))
+        assertEquals(GamePhase.RUNNING, service.status(region.id).phase)
 
         firstTimeout.run()
-        assertTrue(service.status(region.id).startsWith("race active"))
+        assertEquals(GamePhase.RUNNING, service.status(region.id).phase)
 
         val currentTimeout = harness.delayed.last { it.delay == 40L }.task
         currentTimeout.run()
-        assertEquals("race idle", service.status(region.id))
+        assertEquals(GamePhase.IDLE, service.status(region.id).phase)
     }
 
     @Test
@@ -96,13 +97,13 @@ class ModeLifecycleServiceTest {
 
         assertTrue(service.forceEnd(region.id, "test-restart"))
         startRound(service, region, first, second)
-        assertTrue(service.status(region.id).contains("released=false"))
+        assertEquals(0, service.status(region.id).extra["released"])
 
         oldRelease.run()
         oldTimeout.run()
 
-        assertTrue(service.status(region.id).startsWith("round active"))
-        assertTrue(service.status(region.id).contains("released=false"))
+        assertEquals(GamePhase.RUNNING, service.status(region.id).phase)
+        assertEquals(0, service.status(region.id).extra["released"])
     }
 
     @Test
@@ -112,26 +113,30 @@ class ModeLifecycleServiceTest {
             "duel",
             "dual_pvp",
             mapOf(
-                "min-players" to "1",
                 "require-ready" to "false",
                 "replace-gear" to "true",
                 "kit" to "stone_sword:1",
+                "spawn-points" to "world,0,64,0;world,10,64,0",
             ),
         )
-        val player = player("Fighter")
-        val inventory = mock(PlayerInventory::class.java)
-        `when`(player.inventory).thenReturn(inventory)
-        harness.register(region, player)
+        val first = player("First")
+        val second = player("Second")
+        val secondInventory = mock(PlayerInventory::class.java)
+        `when`(second.inventory).thenReturn(secondInventory)
+        harness.register(region, first, second)
         val service = CombatModeService(harness.plugin)
 
-        service.onEnter(player, region)
-        val staleStart = harness.entityTasks.single()
-        service.onLeave(player, region.id, "left-before-start-task")
+        // M3：走进场地不再自动报名，必须先 /regions game <id> join；两人报名即满足决斗阵容。
+        assertTrue(service.join(first, region.id) is JoinResult.Joined)
+        assertTrue(service.join(second, region.id) is JoinResult.Joined)
+        assertEquals(GamePhase.RUNNING, service.status(region.id).phase)
 
+        val staleStart = harness.entityTasks.last()
+        service.leave(second, region.id)
         staleStart.run()
 
-        assertEquals("idle", service.status(region.id))
-        verify(inventory, never()).clear()
+        assertEquals(GamePhase.IDLE, service.status(region.id).phase)
+        verify(secondInventory, never()).clear()
     }
 
     @Test
@@ -159,7 +164,7 @@ class ModeLifecycleServiceTest {
 
         harness.entityTasks.toList().forEach(Runnable::run)
 
-        assertTrue(service.status(region.id).startsWith("race waiting"))
+        assertEquals(GamePhase.WAITING, service.status(region.id).phase)
     }
 
     private fun startRound(
@@ -172,7 +177,7 @@ class ModeLifecycleServiceTest {
         service.onEnter(second, region)
         assertTrue(service.ready(first, region.id))
         assertTrue(service.ready(second, region.id))
-        assertTrue(service.status(region.id).startsWith("round active"))
+        assertEquals(GamePhase.RUNNING, service.status(region.id).phase)
     }
 
     private fun region(id: String, type: String, values: Map<String, String>) = RegionDefinition(

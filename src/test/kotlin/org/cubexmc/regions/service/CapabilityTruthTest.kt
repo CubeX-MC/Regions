@@ -37,7 +37,16 @@ class CapabilityTruthTest {
         val conditions = RegionConditionRegistry().apply { registerDefaults() }
         val effects = ScopedEffectService(mock(RegionsPlugin::class.java)).apply { registerDefaults() }
         val modes = RegionModeRegistry().apply {
-            listOf("free_event", "dual_pvp", "union_war", "run_race", "boat_race", "horse_race", "hide_and_seek").forEach(::register)
+            listOf(
+                "free_event",
+                "dual_pvp",
+                "union_war",
+                "free_for_all",
+                "run_race",
+                "boat_race",
+                "horse_race",
+                "hide_and_seek",
+            ).forEach(::register)
         }
         val catalog = CapabilityCatalog().apply { BuiltInRegionCapabilities.registerAll(this) }
 

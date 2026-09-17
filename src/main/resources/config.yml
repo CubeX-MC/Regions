@@ -1,8 +1,16 @@
 config-version: 4
 language: zh_CN
+# 玩家语言策略：server=全服统一使用上面的语言；player=玩家可用 /regions language 覆盖，
+# 未选择时跟随客户端语言（仅 zh_CN/en_US，其余回退服务器语言）。
+locale-mode: server
 
 audit:
   max-events: 2000
+
+modes:
+  # 走进战斗场地时"这里可以报名"提示的冷却秒数。进入区域本身不等于报名（PLAN.md §5.3），
+  # 所以提示会带冷却，避免每走一步刷屏；缺失时按 60 秒处理。
+  entry-prompt-cooldown-seconds: 60
 
 publishing:
   keep-revisions: 20

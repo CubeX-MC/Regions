@@ -1,9 +1,9 @@
-templates-version: 1
+templates-version: 2
 
 templates:
   mini_kingdom:
-    name: "小人国"
-    description: "玩家进入后缩小，禁飞、禁隐身、禁 PVP。"
+    name-key: templates.mini_kingdom.name
+    description-key: templates.mini_kingdom.description
     mode:
       type: free_event
     flags:
@@ -22,12 +22,12 @@ templates:
         - name: "入场提示"
           then:
             - type: title
-              title: "&a小人国"
-              subtitle: "&7离开区域后自动恢复"
+              title-key: templates.mini_kingdom.enter.title
+              subtitle-key: templates.mini_kingdom.enter.subtitle
 
   event_plaza:
-    name: "活动广场"
-    description: "轻量活动区域，默认禁 PVP 和禁飞。"
+    name-key: templates.event_plaza.name
+    description-key: templates.event_plaza.description
     mode:
       type: free_event
     flags:
@@ -37,8 +37,8 @@ templates:
         value: deny
 
   run_race:
-    name: "跑步赛道"
-    description: "跑步/跑酷比赛。创建时会问你要起点和终点；检查点可选，之后在 GUI 里加。"
+    name-key: templates.run_race.name
+    description-key: templates.run_race.description
     parameters:
       start:
         type: location
@@ -68,11 +68,11 @@ templates:
         - name: "完赛提示"
           then:
             - type: broadcast
-              text: "&6{player} 完成比赛，名次 #{rank}，用时 {race_time_ms}ms。"
+              text-key: templates.run_race.finish.text
 
   boat_race:
-    name: "划船赛道"
-    description: "划船比赛。参赛者必须坐在船上才会记录检查点和终点。创建时会问你要起点和终点。"
+    name-key: templates.boat_race.name
+    description-key: templates.boat_race.description
     parameters:
       start:
         type: location
@@ -102,11 +102,11 @@ templates:
         - name: "完赛提示"
           then:
             - type: broadcast
-              text: "&6{player} 划船到达终点，名次 #{rank}。"
+              text-key: templates.boat_race.finish.text
 
   horse_race:
-    name: "骑马赛道"
-    description: "骑马比赛。参赛者必须骑马才会记录检查点和终点。创建时会问你要起点和终点。"
+    name-key: templates.horse_race.name
+    description-key: templates.horse_race.description
     parameters:
       start:
         type: location
@@ -139,24 +139,34 @@ templates:
         - name: "完赛提示"
           then:
             - type: broadcast
-              text: "&6{player} 骑马到达终点，名次 #{rank}。"
+              text-key: templates.horse_race.finish.text
 
   dual_pvp:
-    name: "双人决斗场"
-    description: "2 名玩家进入后全员确认开始，开战时扣押原装备并发放指定装备。"
+    name-key: templates.dual_pvp.name
+    description-key: templates.dual_pvp.description
     parameters:
       respawn:
+        type: location
+        required: true
+      spawn-a:
+        type: location
+        required: true
+      spawn-b:
         type: location
         required: true
     mode:
       type: dual_pvp
       min-players: 2
       max-players: 2
+      best-of: 1
+      round-seconds: 180
+      intermission-seconds: 5
       require-ready: true
       replace-gear: true
       kit: "IRON_SWORD:1,BOW:1,ARROW:16,COOKED_BEEF:8"
       armor: "IRON_BOOTS:1,IRON_LEGGINGS:1,IRON_CHESTPLATE:1,IRON_HELMET:1"
       offhand: "SHIELD:1"
+      spawn-points: "${spawn-a};${spawn-b}"
       respawn: "${respawn}"
     flags:
       pvp:
@@ -170,30 +180,91 @@ templates:
         - name: "开战提示"
           then:
             - type: title
-              title: "&c决斗开始"
-              subtitle: "&7击败对手后会自动恢复装备"
+              title-key: templates.dual_pvp.start.title
+              subtitle-key: templates.dual_pvp.start.subtitle
       on_mode_end:
         - name: "结束提示"
           then:
             - type: message
-              text: "&e决斗结束，装备已恢复。"
+              text-key: templates.dual_pvp.end.text
 
-  union_war:
-    name: "工会战场"
-    description: "多人进入后全员确认开始，使用指定战斗装备。工会关系判定后续接入 UnionProvider。"
+  free_for_all:
+    name-key: templates.free_for_all.name
+    description-key: templates.free_for_all.description
     parameters:
       respawn:
         type: location
         required: true
+      spawn-1:
+        type: location
+        required: true
+      spawn-2:
+        type: location
+        required: true
+      spawn-3:
+        type: location
+        required: true
+      spawn-4:
+        type: location
+        required: true
+    mode:
+      type: free_for_all
+      # 出生点数量必须不少于上限人数，所以模板先给 4 人场；要开到 16 人在玩法页继续补点。
+      min-players: 4
+      max-players: 4
+      timeout-seconds: 600
+      require-ready: true
+      replace-gear: true
+      kit: "IRON_SWORD:1,BOW:1,ARROW:16,COOKED_BEEF:8"
+      armor: "IRON_BOOTS:1,IRON_LEGGINGS:1,IRON_CHESTPLATE:1,IRON_HELMET:1"
+      offhand: "SHIELD:1"
+      spawn-points: "${spawn-1};${spawn-2};${spawn-3};${spawn-4}"
+      respawn: "${respawn}"
+    flags:
+      pvp:
+        value: allow
+      item_drop:
+        value: deny
+      fly:
+        value: deny
+    triggers:
+      on_mode_start:
+        - name: "开战提示"
+          then:
+            - type: broadcast
+              text-key: templates.free_for_all.start.text
+      on_mode_end:
+        - name: "结束提示"
+          then:
+            - type: message
+              text-key: templates.free_for_all.end.text
+
+  union_war:
+    name-key: templates.union_war.name
+    description-key: templates.union_war.description
+    parameters:
+      respawn:
+        type: location
+        required: true
+      spawn-a:
+        type: location
+        required: true
+      spawn-b:
+        type: location
+        required: true
     mode:
       type: union_war
-      min-players: 4
+      team-size: 5
       min-unions: 2
+      timeout-seconds: 600
       require-ready: true
       replace-gear: true
       kit: "IRON_SWORD:1,BOW:1,ARROW:32,COOKED_BEEF:16"
       armor: "IRON_BOOTS:1,IRON_LEGGINGS:1,IRON_CHESTPLATE:1,IRON_HELMET:1"
       offhand: "SHIELD:1"
+      # 每队先给一个集合起点；在玩法页用"添加甲方/乙方出生点"补到每队人数。
+      spawn-points: "${spawn-a}"
+      spawn-points-b: "${spawn-b}"
       respawn: "${respawn}"
       # 可选奖励请在套用模板后设置 reward-source: contract 与 reward-contract: <WAGER id>。
       # 模板不预填合同 id，避免把同一个资金凭证复制到多个场地。
@@ -209,16 +280,16 @@ templates:
         - name: "工会战开战"
           then:
             - type: broadcast
-              text: "&c工会战开始！代表你的工会活到最后。"
+              text-key: templates.union_war.start.text
       on_mode_end:
         - name: "工会战结束"
           then:
             - type: broadcast
-              text: "&e工会战结束，装备已恢复。"
+              text-key: templates.union_war.end.text
 
   hide_and_seek:
-    name: "藏猫猫场地"
-    description: "回合制小游戏。玩家进入后 ready，开局自动分配寻找者和隐藏者。寻找者攻击隐藏者即找到对方，不造成真实伤害。"
+    name-key: templates.hide_and_seek.name
+    description-key: templates.hide_and_seek.description
     parameters:
       respawn:
         type: location
@@ -249,20 +320,20 @@ templates:
         - name: "小游戏开始"
           then:
             - type: title
-              title: "&a藏猫猫开始"
-              subtitle: "&7寻找者稍后释放"
+              title-key: templates.hide_and_seek.start.title
+              subtitle-key: templates.hide_and_seek.start.subtitle
       on_role_assigned:
         - name: "身份已分配"
           then:
             - type: message
-              text: "&e你的身份已经分配，请查看聊天提示。"
+              text-key: templates.hide_and_seek.assigned.text
       on_found:
         - name: "玩家被找到"
           then:
             - type: broadcast
-              text: "&6{player} 被找到了。"
+              text-key: templates.hide_and_seek.found.text
       on_mode_end:
         - name: "小游戏结束"
           then:
             - type: message
-              text: "&e小游戏结束，临时状态已恢复。"
+              text-key: templates.hide_and_seek.end.text

@@ -125,14 +125,25 @@ class RegionTriggerService(private val plugin: RegionsPlugin) {
         }
     }
 
+    /**
+     * Action 文本解析：`<field>-key` 先经语言文件解析（PLAN.md §4.3），缺失时按序回退字面量字段。
+     */
+    private fun actionText(action: ActionConfig, keyField: String, literalFields: List<String>): String? {
+        action.values[keyField]?.let { return plugin.lang().message(it) }
+        for (field in literalFields) {
+            action.values[field]?.let { return it }
+        }
+        return null
+    }
+
     private fun message(action: ActionConfig, player: Player, region: RegionDefinition) {
-        val text = action.values["text"] ?: action.values["message"] ?: return
+        val text = actionText(action, "text-key", listOf("text", "message")) ?: return
         plugin.lang().sendRaw(player, replace(text, player, region))
     }
 
     private fun title(action: ActionConfig, player: Player, region: RegionDefinition) {
-        val title = replace(action.values["title"] ?: "", player, region)
-        val subtitle = replace(action.values["subtitle"] ?: "", player, region)
+        val title = actionText(action, "title-key", listOf("title")) ?: ""
+        val subtitle = actionText(action, "subtitle-key", listOf("subtitle")) ?: ""
         val fadeIn = action.values["fade-in"]?.toIntOrNull() ?: 10
         val stay = action.values["stay"]?.toIntOrNull() ?: 40
         val fadeOut = action.values["fade-out"]?.toIntOrNull() ?: 10
@@ -193,7 +204,7 @@ class RegionTriggerService(private val plugin: RegionsPlugin) {
     }
 
     private fun broadcast(action: ActionConfig, player: Player, region: RegionDefinition) {
-        val text = replace(action.values["text"] ?: action.values["message"] ?: return, player, region)
+        val text = replace(actionText(action, "text-key", listOf("text", "message")) ?: return, player, region)
         for (target in plugin.server.onlinePlayers.toList()) {
             if (plugin.sessions().activeSession(target.uniqueId, region.id) == null) {
                 continue

@@ -46,6 +46,10 @@ class RewardFundingStore(
             yaml["$path.winner-id"] = lease.winnerId?.toString()
             yaml["$path.winner-mode"] = lease.winnerMode
             yaml["$path.winner-keys"] = lease.winnerKeys.toList()
+            yaml["$path.winner-unit"] = lease.winnerUnit
+            for ((unit, party) in lease.unitParties) {
+                yaml["$path.unit-parties.$unit"] = party
+            }
             yaml["$path.reason"] = lease.reason
             yaml["$path.created-at"] = lease.createdAt
         }
@@ -88,6 +92,14 @@ class RewardFundingStore(
                     }
                     val winnerKeys = section.getStringList("winner-keys")
                     winnerKeys.forEach { UUID.fromString(it) }
+                    val unitParties = section.getConfigurationSection("unit-parties")
+                        ?.getValues(false)
+                        ?.mapValues { entry ->
+                            val raw = entry.value?.toString().orEmpty()
+                            UUID.fromString(raw)
+                            raw
+                        }
+                        .orEmpty()
                     loaded[regionId] = Lease(
                         regionId,
                         section.getString("contract-id") ?: error("Lease $regionId: contract-id missing"),
@@ -98,6 +110,8 @@ class RewardFundingStore(
                         LinkedHashSet(winnerKeys),
                         section.getString("reason", "") ?: "",
                         section.getLong("created-at"),
+                        section.getString("winner-unit")?.takeIf(String::isNotBlank),
+                        unitParties,
                     )
                 }
             }
@@ -122,6 +136,10 @@ class RewardFundingStore(
         var winnerKeys: Set<String> = emptySet(),
         var reason: String = "",
         val createdAt: Long = System.currentTimeMillis(),
+        /** 工会战：开赛前锁定的获胜 Nation ID。 */
+        var winnerUnit: String? = null,
+        /** 工会战：开赛前锁定的 `Nation ID → 合同签署方 UUID`。 */
+        var unitParties: Map<String, String> = emptyMap(),
     )
 
     enum class LeaseState {

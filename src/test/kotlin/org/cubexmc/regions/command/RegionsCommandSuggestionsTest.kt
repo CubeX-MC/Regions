@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test
 class RegionsCommandSuggestionsTest {
     @Test
     fun `empty Paper arguments return ordinary player root suggestions`() {
-        assertEquals(listOf("game", "help"), regionRootSuggestions(false, emptyArray()))
+        assertEquals(listOf("game", "help", "language"), regionRootSuggestions(false, emptyArray()))
     }
 
     @Test

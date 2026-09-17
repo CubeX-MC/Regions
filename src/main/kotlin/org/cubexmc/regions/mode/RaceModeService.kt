@@ -30,22 +30,22 @@ class RaceModeService(private val plugin: RegionsPlugin) {
             return false
         }
         if (endingRegions.contains(region.id)) {
-            plugin.sendGame(player, plugin.gameText("game.race.restoring", mapOf("name" to region.name)))
+            plugin.sendGame(player, "game.race.restoring", mapOf("name" to region.name))
             return false
         }
         val state = state(region)
         if (state.active) {
-            plugin.sendGame(player, plugin.gameText("game.race.in-progress", mapOf("name" to region.name)))
+            plugin.sendGame(player, "game.race.in-progress", mapOf("name" to region.name))
             return false
         }
         val maxPlayers = region.mode?.values?.get("max-players")?.toIntOrNull()?.coerceAtLeast(0) ?: 0
         if (maxPlayers > 0 && !state.players.contains(player.uniqueId) && state.players.size >= maxPlayers) {
-            plugin.sendGame(player, plugin.gameText("game.race.full", mapOf("name" to region.name)))
+            plugin.sendGame(player, "game.race.full", mapOf("name" to region.name))
             return false
         }
         state.players.add(player.uniqueId)
         state.ready.remove(player.uniqueId)
-        plugin.sendGame(player, plugin.gameText("game.race.joined", mapOf("name" to region.name, "id" to region.id)))
+        plugin.sendGame(player, "game.race.joined", mapOf("name" to region.name, "id" to region.id))
         return true
     }
 
@@ -58,7 +58,7 @@ class RaceModeService(private val plugin: RegionsPlugin) {
         if (state.players.isEmpty()) {
             states.remove(regionId)
         } else if (state.active) {
-            broadcast(state, plugin.gameText("game.race.left", mapOf("player" to player.name)))
+            broadcast(state, "game.race.left", mapOf("player" to player.name))
         }
     }
 
@@ -85,24 +85,25 @@ class RaceModeService(private val plugin: RegionsPlugin) {
         }
         val state = state(region)
         if (!state.players.contains(player.uniqueId)) {
-            plugin.sendGame(player, plugin.gameText("game.race.not-inside"))
+            plugin.sendGame(player, "game.race.not-inside", emptyMap())
             return true
         }
         if (state.active) {
-            plugin.sendGame(player, plugin.gameText("game.race.already-started"))
+            plugin.sendGame(player, "game.race.already-started", emptyMap())
             return true
         }
         val startConstraint = vehicleConstraint(region, "start", 0)
         if (!validRaceState(player, startConstraint)) {
-            plugin.sendGame(player, raceStateMessage(startConstraint))
+            val (stateKey, stateArgs) = raceStateMessage(startConstraint)
+            plugin.sendGame(player, stateKey, stateArgs)
             return true
         }
         if (!nearStart(player, region)) {
-            plugin.sendGame(player, plugin.gameText("game.race.start-required"))
+            plugin.sendGame(player, "game.race.start-required", emptyMap())
             return true
         }
         state.ready.add(player.uniqueId)
-        broadcast(state, plugin.gameText("game.race.ready", mapOf("player" to player.name, "current" to state.ready.size.toString(), "total" to state.players.size.toString())))
+        broadcast(state, "game.race.ready", mapOf("player" to player.name, "current" to state.ready.size.toString(), "total" to state.players.size.toString()))
         if (startMode(region) == "vote" && state.ready.size >= requiredVotes(region, state)) {
             start(region, state, "vote")
         }
@@ -153,12 +154,14 @@ class RaceModeService(private val plugin: RegionsPlugin) {
     }
 
     @Synchronized
-    fun status(regionId: String): String {
-        val state = states[regionId] ?: return "race idle"
+    fun status(regionId: String): GameStatus {
+        val modeType = plugin.modeTypeOf(regionId)
+        val state = states[regionId]
+            ?: return GameStatus(regionId, modeType, GamePhase.IDLE)
         return if (state.active) {
-            "race active players=${state.players.size} finished=${state.finished.size}"
+            GameStatus(regionId, modeType, GamePhase.RUNNING, players = state.players.size, extra = mapOf("finished" to state.finished.size))
         } else {
-            "race waiting ready=${state.ready.size}/${state.players.size}"
+            GameStatus(regionId, modeType, GamePhase.WAITING, players = state.players.size, ready = state.ready.size)
         }
     }
 
@@ -169,7 +172,7 @@ class RaceModeService(private val plugin: RegionsPlugin) {
         }
         val minPlayers = region.mode?.values?.get("min-players")?.toIntOrNull()?.coerceAtLeast(1) ?: 1
         if (state.players.size < minPlayers) {
-            broadcast(state, plugin.gameText("game.race.waiting-players", mapOf("current" to state.players.size.toString(), "required" to minPlayers.toString())))
+            broadcast(state, "game.race.waiting-players", mapOf("current" to state.players.size.toString(), "required" to minPlayers.toString()))
             return
         }
         state.starting = true
@@ -212,7 +215,7 @@ class RaceModeService(private val plugin: RegionsPlugin) {
         val currentPlayers = state.players.toSet()
         val minPlayers = region.mode?.values?.get("min-players")?.toIntOrNull()?.coerceAtLeast(1) ?: 1
         if (currentPlayers.size < minPlayers) {
-            broadcast(state, plugin.gameText("game.race.waiting-players", mapOf("current" to currentPlayers.size.toString(), "required" to minPlayers.toString())))
+            broadcast(state, "game.race.waiting-players", mapOf("current" to currentPlayers.size.toString(), "required" to minPlayers.toString()))
             return
         }
         if (!checks.keys.containsAll(currentPlayers)) return
@@ -220,11 +223,16 @@ class RaceModeService(private val plugin: RegionsPlugin) {
             region.mode?.values?.get("require-start")?.toBooleanStrictOrNull() != false &&
             currentPlayers.any { checks[it]?.atStart != true }
         ) {
-            broadcast(state, plugin.gameText("game.race.waiting-at-start"))
+            broadcast(state, "game.race.waiting-at-start", emptyMap())
             return
         }
         if (currentPlayers.any { checks[it]?.validVehicle != true }) {
-            broadcast(state, plugin.gameText("game.race.waiting-vehicle", mapOf("vehicle" to describeVehicleConstraint(vehicleConstraint(region, "start", 0)))))
+            // 载具显示名是语言键，交给每个接收者各自解析，避免中英玩家看到对方的语言。
+            broadcastLocalized(
+                state,
+                "game.race.waiting-vehicle",
+                mapOf("vehicle" to vehicleConstraintArg(vehicleConstraint(region, "start", 0))),
+            )
             return
         }
         state.active = true
@@ -242,12 +250,12 @@ class RaceModeService(private val plugin: RegionsPlugin) {
                 plugin.triggers().fire(RegionTrigger.ON_MODE_START, player, region)
             })
         }
-        broadcast(state, plugin.gameText("game.race.started", mapOf("name" to region.name)))
+        broadcast(state, "game.race.started", mapOf("name" to region.name))
         val timeoutSeconds = raceTimeoutSeconds(region)
         if (timeoutSeconds > 0) {
             plugin.regionScheduler().runGlobalLater(Runnable {
                 if (states[region.id] === state && state.active) {
-                    broadcast(state, plugin.gameText("game.race.timeout"))
+                    broadcast(state, "game.race.timeout", emptyMap())
                     end(region.id, "time-limit")
                 }
             }, timeoutSeconds * 20L)
@@ -303,7 +311,7 @@ class RaceModeService(private val plugin: RegionsPlugin) {
         } else {
             endingRegions.remove(regionId)
         }
-        broadcast(state, plugin.gameText("game.race.ended"))
+        broadcast(state, "game.race.ended", emptyMap())
         plugin.log().debug("Ended race $regionId: $reason")
     }
 
@@ -320,7 +328,7 @@ class RaceModeService(private val plugin: RegionsPlugin) {
                 val next = index + 1
                 state.progress[player.uniqueId] = next
                 plugin.sessions().setMetadata(player, region.id, "race_checkpoint", next.toString())
-                plugin.sendGame(player, plugin.gameText("game.race.checkpoint", mapOf("index" to next.toString(), "total" to checkpoints.size.toString())))
+                plugin.sendGame(player, "game.race.checkpoint", mapOf("index" to next.toString(), "total" to checkpoints.size.toString()))
                 plugin.triggers().fire(RegionTrigger.ON_CHECKPOINT, player, region)
             }
             return
@@ -348,9 +356,9 @@ class RaceModeService(private val plugin: RegionsPlugin) {
                 "elapsed-ms" to elapsed.toString(),
             ),
         )
-        plugin.sendGame(player, plugin.gameText("game.race.your-result", mapOf("rank" to rank.toString(), "time" to (elapsed / 1000.0).toString())))
+        plugin.sendGame(player, "game.race.your-result", mapOf("rank" to rank.toString(), "time" to (elapsed / 1000.0).toString()))
         plugin.triggers().fire(RegionTrigger.ON_FINISH, player, region)
-        broadcast(state, plugin.gameText("game.race.finished", mapOf("player" to player.name, "rank" to rank.toString())))
+        broadcast(state, "game.race.finished", mapOf("player" to player.name, "rank" to rank.toString()))
         if (state.finished.containsAll(state.players)) {
             end(region.id, "all-finished")
         }
@@ -376,13 +384,13 @@ class RaceModeService(private val plugin: RegionsPlugin) {
         }
     }
 
-    private fun raceStateMessage(constraint: String): String =
+    private fun raceStateMessage(constraint: String): Pair<String, Map<String, String>> =
         when (constraint.lowercase(Locale.ROOT)) {
-            "none", "on_foot", "on-foot", "no_vehicle", "no-vehicle", "foot" -> plugin.gameText("game.race.require.on-foot")
-            "any", "vehicle", "any_vehicle", "any-vehicle" -> plugin.gameText("game.race.require.any")
-            "boat" -> plugin.gameText("game.race.require.boat")
-            "horse" -> plugin.gameText("game.race.require.horse")
-            else -> plugin.gameText("game.race.require.other", mapOf("vehicle" to describeVehicleConstraint(constraint)))
+            "none", "on_foot", "on-foot", "no_vehicle", "no-vehicle", "foot" -> "game.race.require.on-foot" to emptyMap()
+            "any", "vehicle", "any_vehicle", "any-vehicle" -> "game.race.require.any" to emptyMap()
+            "boat" -> "game.race.require.boat" to emptyMap()
+            "horse" -> "game.race.require.horse" to emptyMap()
+            else -> "game.race.require.other" to mapOf("vehicle" to describeVehicleConstraint(constraint))
         }
 
     private fun vehicleConstraint(region: RegionDefinition, stage: String, checkpointIndex: Int): String {
@@ -415,6 +423,21 @@ class RaceModeService(private val plugin: RegionsPlugin) {
         val delimiter = if (raw.contains(';')) ';' else ','
         return raw.split(delimiter).map { it.trim() }
     }
+
+    /**
+     * 载具约束对应的占位符值：已知约束走 `gui.vehicle.*` 语言键（按接收者解析），
+     * 无法识别的自定义约束原样显示——那是场地主自己写的内容，不是需要翻译的内部术语。
+     */
+    private fun vehicleConstraintArg(constraint: String): GameArg =
+        when (constraint.lowercase(Locale.ROOT)) {
+            "none", "on_foot", "on-foot", "no_vehicle", "no-vehicle", "foot" -> GameArg.key("gui.vehicle.on-foot")
+            "any", "vehicle", "any_vehicle", "any-vehicle" -> GameArg.key("gui.vehicle.any")
+            "boat" -> GameArg.key("gui.vehicle.boat")
+            "horse" -> GameArg.key("gui.vehicle.horse")
+            "minecart" -> GameArg.key("gui.vehicle.minecart")
+            "pass", "ignore", "any_state", "any-state" -> GameArg.key("gui.vehicle.ignore")
+            else -> GameArg.literal(constraint)
+        }
 
     private fun describeVehicleConstraint(constraint: String): String =
         when (constraint.lowercase(Locale.ROOT)) {
@@ -465,11 +488,16 @@ class RaceModeService(private val plugin: RegionsPlugin) {
     private fun state(region: RegionDefinition): RaceState =
         states.computeIfAbsent(region.id) { RaceState(region.id) }
 
-    private fun broadcast(state: RaceState, message: String) {
+    private fun broadcast(state: RaceState, key: String, placeholders: Map<String, String> = emptyMap()) {
+        broadcastLocalized(state, key, GameArg.literals(placeholders))
+    }
+
+    /** 占位符里有语言键时的广播：每个接收者各自解析一次（PLAN.md §4.2）。 */
+    private fun broadcastLocalized(state: RaceState, key: String, placeholders: Map<String, GameArg>) {
         for (playerId in state.players.toList()) {
             val player = plugin.server.getPlayer(playerId) ?: continue
             plugin.regionScheduler().runAtEntity(player, Runnable {
-                plugin.sendGame(player, message)
+                plugin.sendGameLocalized(player, key, placeholders)
             })
         }
     }

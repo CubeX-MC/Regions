@@ -54,13 +54,29 @@ class RewardFundingService(
     }
 
     @Synchronized
-    override fun settle(region: RegionDefinition, winnerCandidates: Set<UUID>): FundingResult {
+    override fun settle(region: RegionDefinition, winnerCandidates: Set<UUID>): FundingResult =
+        settleInternal(region, FundingSettlement(winnerCandidates))
+
+    /**
+     * 带锁定证据的结算（PLAN.md §7.2）：工会战的赢家是 Nation，收款人由开赛前锁定的
+     * `Nation ID → 合同签署方` 决定。比赛后成员退国、改名或换届都不改变收款人；
+     * 证据不足时保留 lease 进入待复核，不按当前成员关系猜测付款。
+     */
+    @Synchronized
+    override fun settle(region: RegionDefinition, evidence: FundingSettlement): FundingResult =
+        settleInternal(region, evidence)
+
+    private fun settleInternal(region: RegionDefinition, evidence: FundingSettlement): FundingResult {
         if (configuredContract(region) == null) return FundingResult.ok()
         val lease = store.get(region.id) ?: return FundingResult.fail("LEASE_MISSING", "No reward funding lease exists.")
         if (lease.state != LeaseState.SETTLING) {
             lease.state = LeaseState.SETTLING
             lease.winnerMode = region.mode?.type?.lowercase().orEmpty()
-            lease.winnerKeys = winnerCandidates.mapTo(LinkedHashSet(), UUID::toString)
+            lease.winnerKeys = evidence.winnerKeys.mapTo(LinkedHashSet(), UUID::toString)
+            if (evidence.unitParties.isNotEmpty()) {
+                lease.winnerUnit = evidence.winnerUnit
+                lease.unitParties = evidence.unitParties.mapValuesTo(LinkedHashMap()) { it.value.toString() }
+            }
             store.put(lease)
             if (!store.save()) return FundingResult.fail("LEASE_PERSISTENCE_FAILED")
         }
@@ -119,12 +135,32 @@ class RewardFundingService(
     }
 
     private fun resolveWinner(lease: Lease): WinnerResolution {
-        if (lease.winnerKeys.isEmpty()) {
+        if (lease.winnerKeys.isEmpty() && lease.unitParties.isEmpty()) {
             return WinnerResolution(null, FundingResult.fail("WINNER_NOT_FUNDED", "No winner evidence was recorded."))
         }
         val checked = provider.check(lease.contractId, lease.regionId)
         if (!checked.successful) return WinnerResolution(null, checked)
         val fundedParties = listOfNotNull(checked.partyA, checked.partyB)
+        // 开赛前锁定的 Nation → 签署方映射优先：赛后换国、改名、换届都不能改收款人。
+        if (lease.winnerMode == "union_war" && lease.unitParties.isNotEmpty()) {
+            val unit = lease.winnerUnit
+                ?: return WinnerResolution(
+                    null,
+                    FundingResult.fail("WINNER_NOT_FUNDED", "Nation settlement evidence has no winning nation recorded."),
+                )
+            val party = lease.unitParties[unit]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                ?: return WinnerResolution(
+                    null,
+                    FundingResult.fail("WINNER_NOT_FUNDED", "The winning nation does not map to exactly one WAGER party."),
+                )
+            if (fundedParties.isNotEmpty() && party !in fundedParties) {
+                return WinnerResolution(
+                    null,
+                    FundingResult.fail("WINNER_NOT_FUNDED", "The locked recipient is not a party of the current contract."),
+                )
+            }
+            return WinnerResolution(party, FundingResult.ok(lease.contractId))
+        }
         val matches = if (lease.winnerMode == "union_war") {
             val winningUnions = lease.winnerKeys
                 .mapNotNull { runCatching { UUID.fromString(it) }.getOrNull() }

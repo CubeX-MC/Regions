@@ -171,12 +171,23 @@ internal object GuiValues {
         when (type) {
             "dual_pvp" -> linkedMapOf(
                 "min-players" to "2",
+                "max-players" to "2",
+                "best-of" to "1",
+                "round-seconds" to "180",
                 "require-ready" to "true",
                 "replace-gear" to "true",
             )
             "union_war" -> linkedMapOf(
-                "min-players" to "2",
+                "team-size" to "5",
                 "min-unions" to "2",
+                "timeout-seconds" to "600",
+                "require-ready" to "true",
+                "replace-gear" to "true",
+            )
+            "free_for_all" -> linkedMapOf(
+                "min-players" to "4",
+                "max-players" to "16",
+                "timeout-seconds" to "600",
                 "require-ready" to "true",
                 "replace-gear" to "true",
             )

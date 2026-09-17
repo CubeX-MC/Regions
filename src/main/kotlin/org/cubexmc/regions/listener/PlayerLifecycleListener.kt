@@ -15,10 +15,15 @@ import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.event.player.PlayerRespawnEvent
 import org.bukkit.event.player.PlayerTeleportEvent
 import org.bukkit.event.player.PlayerToggleFlightEvent
+import org.bukkit.entity.AreaEffectCloud
+import org.bukkit.entity.Entity
 import org.bukkit.entity.Player
 import org.bukkit.entity.Projectile
+import org.bukkit.entity.Tameable
+import org.bukkit.entity.TNTPrimed
 import org.bukkit.inventory.EquipmentSlot
 import org.cubexmc.regions.RegionsPlugin
+import org.cubexmc.regions.match.DamageDecision
 import org.cubexmc.regions.model.RegionTrigger
 import java.util.Locale
 
@@ -57,20 +62,44 @@ class PlayerLifecycleListener(private val plugin: RegionsPlugin) : Listener {
         }
     }
 
+    /**
+     * 伤害与成员隔离（PLAN.md §6.3）。
+     *
+     * 判定顺序：先问比赛（同局敌对才放行、候场/观战/局外人/阶段保护一律拒绝），
+     * 与比赛无关时才落回场地 PVP 规则。**已经取消的事件不再改回来**——
+     * 其他插件取消的伤害要尊重，通用监听器不抢这个决定权。
+     */
     @EventHandler(ignoreCancelled = true)
     fun onDamage(event: EntityDamageByEntityEvent) {
         val victim = event.entity as? Player ?: return
-        val attacker = attackingPlayer(event) ?: return
+        val attacker = attackingPlayer(event)
+        when (plugin.combatModes().damageDecision(attacker?.uniqueId, victim.uniqueId, isPlayerSourced(event.damager))) {
+            DamageDecision.DENY -> {
+                event.isCancelled = true
+                return
+            }
+
+            DamageDecision.UNRELATED, DamageDecision.ALLOW -> Unit
+        }
+        val responsible = attacker ?: return
         if (plugin.roundModes().onDamage(event)) {
             return
         }
-        if (plugin.flagRules().isDenied(victim, "pvp") || plugin.flagRules().isDenied(attacker, "pvp")) {
+        if (plugin.flagRules().isDenied(victim, "pvp") || plugin.flagRules().isDenied(responsible, "pvp")) {
             event.isCancelled = true
         }
     }
 
+    /**
+     * 丢弃与拾取：场地规则之外，**装备托管期间**一律禁止（PLAN.md §6.3.6）。
+     * 托管期间背包里是比赛发的临时装备，转移出去会让恢复快照与场上物品分叉。
+     */
     @EventHandler(ignoreCancelled = true)
     fun onDrop(event: PlayerDropItemEvent) {
+        if (plugin.combatModes().isGearEscrowed(event.player.uniqueId)) {
+            event.isCancelled = true
+            return
+        }
         if (plugin.flagRules().isDenied(event.player, "item_drop")) {
             event.isCancelled = true
         }
@@ -79,6 +108,10 @@ class PlayerLifecycleListener(private val plugin: RegionsPlugin) : Listener {
     @EventHandler(ignoreCancelled = true)
     fun onPickup(event: EntityPickupItemEvent) {
         val player = event.entity as? Player ?: return
+        if (plugin.combatModes().isGearEscrowed(player.uniqueId)) {
+            event.isCancelled = true
+            return
+        }
         if (plugin.flagRules().isDenied(player, "item_pickup")) {
             event.isCancelled = true
         }
@@ -114,6 +147,8 @@ class PlayerLifecycleListener(private val plugin: RegionsPlugin) : Listener {
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) {
         plugin.trials().stop(event.player, "quit")
+        // 比赛先按弃权处理：即使服主关掉了 cleanup-on-quit，也不能把离线玩家当成存活选手。
+        plugin.combatModes().onDisconnect(event.player, "quit")
         if (plugin.config.getBoolean("safety.cleanup-on-quit", true)) {
             plugin.sessions().cleanup(event.player, "quit")
         }
@@ -122,6 +157,7 @@ class PlayerLifecycleListener(private val plugin: RegionsPlugin) : Listener {
     @EventHandler
     fun onKick(event: PlayerKickEvent) {
         plugin.trials().stop(event.player, "kick")
+        plugin.combatModes().onDisconnect(event.player, "kick")
         if (plugin.config.getBoolean("safety.cleanup-on-quit", true)) {
             plugin.sessions().cleanup(event.player, "kick")
         }
@@ -160,14 +196,25 @@ class PlayerLifecycleListener(private val plugin: RegionsPlugin) : Listener {
         }, 1L)
     }
 
-    private fun attackingPlayer(event: EntityDamageByEntityEvent): Player? {
-        val direct = event.damager
-        if (direct is Player) {
-            return direct
+    /**
+     * 伤害来源里的责任玩家：近战、投射物（箭矢/三叉戟/雪球）、药水与滞留云的投掷者、
+     * 有主人的宠物、玩家点燃的 TNT。返回 null 但 [isPlayerSourced] 为 true 时，
+     * 说明这次伤害可归因于玩家却定位不到具体是谁，比赛成员一律拒绝（PLAN.md §6.3.2）。
+     */
+    private fun attackingPlayer(event: EntityDamageByEntityEvent): Player? =
+        when (val damager = event.damager) {
+            is Player -> damager
+            is Projectile -> damager.shooter as? Player
+            is AreaEffectCloud -> (damager.source as? Projectile)?.shooter as? Player
+            is Tameable -> damager.ownerUniqueId?.let { plugin.server.getPlayer(it) }
+            is TNTPrimed -> damager.source as? Player
+            else -> null
         }
-        if (direct is Projectile) {
-            return direct.shooter as? Player
-        }
-        return null
-    }
+
+    private fun isPlayerSourced(damager: Entity): Boolean =
+        damager is Player ||
+            damager is Projectile ||
+            damager is AreaEffectCloud ||
+            damager is Tameable ||
+            damager is TNTPrimed
 }

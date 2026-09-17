@@ -24,9 +24,21 @@ class CapabilityCatalog {
 
     fun validate(kind: CapabilityKind, id: String, values: Map<String, String>): List<CapabilityValidationIssue> {
         val descriptor = find(kind, id)
-            ?: return listOf(CapabilityValidationIssue("Unknown $kind capability '$id'."))
+            ?: return listOf(CapabilityValidationIssue(
+                code = "capability-unknown",
+                args = mapOf("kind" to kind.name.lowercase(Locale.ROOT), "id" to id),
+                message = "Unknown $kind capability '$id'.",
+            ))
         if (descriptor.status != CapabilityStatus.STABLE) {
-            return listOf(CapabilityValidationIssue("Capability ${descriptor.kind}:${descriptor.id} is ${descriptor.status}."))
+            return listOf(CapabilityValidationIssue(
+                code = "capability-not-stable",
+                args = mapOf(
+                    "kind" to descriptor.kind.name.lowercase(Locale.ROOT),
+                    "id" to descriptor.id,
+                    "status" to descriptor.status.name.lowercase(Locale.ROOT),
+                ),
+                message = "Capability ${descriptor.kind}:${descriptor.id} is ${descriptor.status}.",
+            ))
         }
         val normalizedValues = values.mapKeys { it.key.lowercase(Locale.ROOT) }
         val issues = ArrayList<CapabilityValidationIssue>()
@@ -38,7 +50,7 @@ class CapabilityCatalog {
             }
             if (entry == null) {
                 if (parameter.required) {
-                    issues.add(CapabilityValidationIssue("${descriptor.kind}:${descriptor.id} requires '${parameter.key}'."))
+                    issues.add(capabilityParameterIssue(descriptor, parameter, "parameter-required", "requires"))
                 }
                 continue
             }
@@ -48,12 +60,32 @@ class CapabilityCatalog {
             val accepted = descriptor.parameters.flatMapTo(HashSet()) { it.acceptedKeys() }
             for (key in normalizedValues.keys) {
                 if (!accepted.contains(key)) {
-                    issues.add(CapabilityValidationIssue("${descriptor.kind}:${descriptor.id} does not support parameter '$key'."))
+                    issues.add(CapabilityValidationIssue(
+                        code = "parameter-unknown",
+                        args = mapOf("capability" to capabilityLabel(descriptor), "parameter" to key),
+                        fieldPath = key,
+                        message = "${descriptor.kind}:${descriptor.id} does not support parameter '$key'.",
+                    ))
                 }
             }
         }
         return issues
     }
+
+    private fun capabilityLabel(descriptor: CapabilityDescriptor): String =
+        "${descriptor.kind.name.lowercase(Locale.ROOT)}:${descriptor.id}"
+
+    private fun capabilityParameterIssue(
+        descriptor: CapabilityDescriptor,
+        parameter: ParameterDescriptor,
+        code: String,
+        diagnostic: String,
+    ): CapabilityValidationIssue = CapabilityValidationIssue(
+        code = code,
+        args = mapOf("capability" to capabilityLabel(descriptor), "parameter" to parameter.key),
+        fieldPath = parameter.key,
+        message = "${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' $diagnostic.",
+    )
 
     private fun validateValue(
         descriptor: CapabilityDescriptor,
@@ -62,7 +94,7 @@ class CapabilityCatalog {
     ): CapabilityValidationIssue? {
         if (raw.isBlank() && !parameter.allowBlank) {
             return if (parameter.required) {
-                CapabilityValidationIssue("${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' cannot be blank.")
+                capabilityParameterIssue(descriptor, parameter, "parameter-blank", "cannot be blank")
             } else {
                 null
             }
@@ -74,26 +106,52 @@ class CapabilityCatalog {
         }
         when (parameter.type) {
             ParameterType.INTEGER -> if (number == null) {
-                return CapabilityValidationIssue("${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' must be an integer.")
+                return capabilityParameterIssue(descriptor, parameter, "parameter-integer", "must be an integer")
             }
             ParameterType.DECIMAL -> if (number == null || !number.isFinite()) {
-                return CapabilityValidationIssue("${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' must be a finite number.")
+                return capabilityParameterIssue(descriptor, parameter, "parameter-number", "must be a finite number")
             }
             ParameterType.BOOLEAN -> if (raw.toBooleanStrictOrNull() == null) {
-                return CapabilityValidationIssue("${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' must be true or false.")
+                return capabilityParameterIssue(descriptor, parameter, "parameter-boolean", "must be true or false")
             }
             ParameterType.ENUM -> if (parameter.allowedValues.none { it.equals(raw, ignoreCase = true) }) {
                 return CapabilityValidationIssue(
-                    "${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' must be one of ${parameter.allowedValues.joinToString()}.",
+                    code = "parameter-enum",
+                    args = mapOf(
+                        "capability" to capabilityLabel(descriptor),
+                        "parameter" to parameter.key,
+                        "values" to parameter.allowedValues.joinToString(", "),
+                    ),
+                    fieldPath = parameter.key,
+                    message = "${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' " +
+                        "must be one of ${parameter.allowedValues.joinToString()}.",
                 )
             }
             ParameterType.STRING -> Unit
         }
         if (number != null && parameter.min != null && number < parameter.min) {
-            return CapabilityValidationIssue("${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' must be >= ${parameter.min}.")
+            return CapabilityValidationIssue(
+                code = "parameter-min",
+                args = mapOf(
+                    "capability" to capabilityLabel(descriptor),
+                    "parameter" to parameter.key,
+                    "min" to parameter.min.toString(),
+                ),
+                fieldPath = parameter.key,
+                message = "${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' must be >= ${parameter.min}.",
+            )
         }
         if (number != null && parameter.max != null && number > parameter.max) {
-            return CapabilityValidationIssue("${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' must be <= ${parameter.max}.")
+            return CapabilityValidationIssue(
+                code = "parameter-max",
+                args = mapOf(
+                    "capability" to capabilityLabel(descriptor),
+                    "parameter" to parameter.key,
+                    "max" to parameter.max.toString(),
+                ),
+                fieldPath = parameter.key,
+                message = "${descriptor.kind}:${descriptor.id} parameter '${parameter.key}' must be <= ${parameter.max}.",
+            )
         }
         return null
     }

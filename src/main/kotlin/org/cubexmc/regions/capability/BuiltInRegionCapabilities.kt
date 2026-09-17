@@ -89,11 +89,20 @@ object BuiltInRegionCapabilities {
             bool("found-becomes-seeker"),
             string("seeker-kit"), string("hider-kit"),
             string("reward-source"), string("reward-contract"),
+            // M3–M6 比赛参数（PLAN.md §6.2/§7）：阶段时长、赛制、分队人数与点位。
+            integer("preparing-seconds", min = 1.0, max = 60.0),
+            integer("countdown-seconds", min = 1.0, max = 30.0),
+            integer("intermission-seconds", min = 0.0, max = 60.0),
+            integer("best-of", min = 1.0, max = 3.0),
+            integer("team-size", min = 2.0, max = 10.0),
+            string("spawn-points"), string("spawn-points-b"),
+            enum("diplomacy", setOf("agreed", "enemy-only")),
         )
         listOf(
             "free_event",
             "dual_pvp",
             "union_war",
+            "free_for_all",
             "run_race",
             "boat_race",
             "horse_race",
@@ -167,13 +176,16 @@ object BuiltInRegionCapabilities {
     }
 
     private fun registerActions(catalog: CapabilityCatalog) {
-        catalog.register(descriptor(CapabilityKind.ACTION, "message", parameters = listOf(string("text", true, setOf("message")))))
-        catalog.register(descriptor(CapabilityKind.ACTION, "broadcast", parameters = listOf(string("text", true, setOf("message")))))
+        // text/title/subtitle 与对应 *-key 键形式互斥且至少其一，由 RegionValidationService 判定；
+        // schema 只声明接受的字段，required 让位给"二选一"规则。
+        catalog.register(descriptor(CapabilityKind.ACTION, "message", parameters = listOf(string("text", aliases = setOf("message")), string("text-key"))))
+        catalog.register(descriptor(CapabilityKind.ACTION, "broadcast", parameters = listOf(string("text", aliases = setOf("message")), string("text-key"))))
         catalog.register(descriptor(
             CapabilityKind.ACTION,
             "title",
             parameters = listOf(
                 string("title", allowBlank = true), string("subtitle", allowBlank = true),
+                string("title-key"), string("subtitle-key"),
                 integer("fade-in", min = 0.0), integer("stay", min = 0.0), integer("fade-out", min = 0.0),
             ),
         ))

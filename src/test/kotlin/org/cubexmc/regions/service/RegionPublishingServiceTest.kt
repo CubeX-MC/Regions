@@ -182,6 +182,62 @@ class RegionPublishingServiceTest {
         assertEquals(RegionLifecycle.DRAFT, storage.find("arena")?.lifecycle)
     }
 
+    @Test
+    fun `a write based on a stale draft revision is refused instead of overwriting the newer draft`() {
+        val current = region(1, "Published")
+        val draft = region(2, "Draft").copy(lifecycle = RegionLifecycle.DRAFT, publishedRevision = 1)
+        storage.put(current)
+        storage.putDraft(draft)
+        `when`(registry.find("arena")).thenReturn(current)
+        `when`(authority.canManage(sender, current)).thenReturn(AuthorityDecision.allow())
+        `when`(authority.canCreate(sender, current.source)).thenReturn(AuthorityDecision.allow())
+
+        // 另一个管理员已经保存到 revision 3；拿着 revision 2 的页面再保存必须被拒绝。
+        val newer = draft.copy(revision = 3, name = "Someone else's draft")
+        storage.putDraft(newer)
+        val result = service.saveDraft(sender, draft.copy(name = "My stale edit"), expectedRevision = 2)
+
+        assertEquals(false, result.success)
+        assertEquals("draft-revision-stale", result.code)
+        assertEquals("Someone else's draft", storage.findDraft("arena")?.name)
+    }
+
+    @Test
+    fun `a write from the revision the page was rendered from is accepted`() {
+        val current = region(1, "Published")
+        val draft = region(2, "Draft").copy(lifecycle = RegionLifecycle.DRAFT, publishedRevision = 1)
+        storage.put(current)
+        storage.putDraft(draft)
+        `when`(registry.find("arena")).thenReturn(current)
+        `when`(authority.canManage(sender, current)).thenReturn(AuthorityDecision.allow())
+        `when`(authority.canCreate(sender, current.source)).thenReturn(AuthorityDecision.allow())
+
+        val result = service.saveDraft(sender, draft.copy(name = "Fresh edit"), expectedRevision = 2)
+
+        assertTrue(result.success)
+        assertEquals("Fresh edit", storage.findDraft("arena")?.name)
+        assertEquals(3, storage.findDraft("arena")?.revision)
+    }
+
+    @Test
+    fun `publishing refuses a draft that moved on after the preview`() {
+        val current = region(1, "Published")
+        val draft = region(2, "Draft").copy(lifecycle = RegionLifecycle.DRAFT, publishedRevision = 1)
+        storage.put(current)
+        storage.putDraft(draft)
+        `when`(registry.find("arena")).thenReturn(current)
+        `when`(authority.canManage(sender, draft)).thenReturn(AuthorityDecision.allow())
+        `when`(validation.validate(draft)).thenReturn(emptyList())
+
+        storage.putDraft(draft.copy(revision = 5, name = "Edited after preview"))
+        val result = service.publish(sender, "arena", expectedRevision = 2)
+
+        assertEquals(false, result.success)
+        assertEquals("publish-preview-stale", result.code)
+        assertEquals("Published", storage.find("arena")?.name)
+        assertEquals("Edited after preview", storage.findDraft("arena")?.name)
+    }
+
     private fun region(revision: Long, name: String): RegionDefinition = RegionDefinition(
         id = "arena",
         name = name,

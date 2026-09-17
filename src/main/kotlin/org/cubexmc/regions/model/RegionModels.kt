@@ -193,10 +193,21 @@ data class LocationSnapshot(
     }
 }
 
+/**
+ * One validation finding.
+ *
+ * [code] is the stable error code players see rendered from `errors.<code>` with [args];
+ * [fieldPath] is the programmatic location used by logs and (later) fix-navigation, its leaf
+ * segment translated through `labels.field.*`. [message] is the English diagnostic for logs and
+ * tests only — it must never be inserted into player-visible text.
+ */
 data class ValidationIssue(
     val regionId: String,
     val severity: ValidationSeverity,
-    val message: String,
+    val code: String,
+    val args: Map<String, String> = emptyMap(),
+    val fieldPath: String? = null,
+    val message: String = "",
 )
 
 enum class ValidationSeverity {

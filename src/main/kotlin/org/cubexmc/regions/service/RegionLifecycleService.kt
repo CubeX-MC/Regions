@@ -14,14 +14,31 @@ class RegionLifecycleService(private val plugin: RegionsPlugin) {
     fun unfreeze(sender: CommandSender, regionId: String, reason: String): ServiceResult {
         val authority = plugin.authority().canUseGlobalAdministration(sender)
         if (!authority.allowed) return ServiceResult.fail(authority.denial?.messageKey ?: "no-permission")
-        val region = plugin.regions().find(regionId) ?: return ServiceResult.fail("Region not found: $regionId")
-        if (region.lifecycle != RegionLifecycle.FROZEN) return ServiceResult.fail("Region is not frozen: $regionId")
+        val region = plugin.regions().find(regionId)
+            ?: return ServiceResult.failCoded("region-not-found", mapOf("id" to regionId), "Region not found: $regionId")
+        if (region.lifecycle != RegionLifecycle.FROZEN) {
+            return ServiceResult.failCoded("region-not-frozen", mapOf("id" to regionId), "Region is not frozen: $regionId")
+        }
         val source = plugin.sources().find(region.source.type)
-            ?: return ServiceResult.fail("Unknown region source: ${region.source.type}")
-        if (!source.isAvailable()) return ServiceResult.fail("Region source is unavailable: ${region.source.type}")
+            ?: return ServiceResult.failCoded(
+                "source-unknown",
+                mapOf("type" to region.source.type),
+                "Unknown region source: ${region.source.type}",
+            )
+        if (!source.isAvailable()) {
+            return ServiceResult.failCoded(
+                "source-unavailable",
+                mapOf("type" to region.source.type),
+                "Region source is unavailable: ${region.source.type}",
+            )
+        }
         val currentOwner = source.ownerId(region.source)
         if (region.source.type.equals("lands", ignoreCase = true) && currentOwner == null) {
-            return ServiceResult.fail("The bound Lands area has no resolvable owner")
+            return ServiceResult.failCoded(
+                "source-owner-unresolved",
+                mapOf("source" to region.source.describe()),
+                "The bound Lands area has no resolvable owner",
+            )
         }
         val nextRevision = region.revision + 1
         val metadata = LinkedHashMap(region.metadata)
@@ -69,7 +86,8 @@ class RegionLifecycleService(private val plugin: RegionsPlugin) {
     }
 
     private fun freezeInternal(regionId: String, reason: String, sender: CommandSender?): ServiceResult {
-        val region = plugin.regions().find(regionId) ?: return ServiceResult.fail("Region not found: $regionId")
+        val region = plugin.regions().find(regionId)
+            ?: return ServiceResult.failCoded("region-not-found", mapOf("id" to regionId), "Region not found: $regionId")
         if (region.lifecycle == RegionLifecycle.FROZEN) return ServiceResult.ok()
         plugin.combatModes().forceEnd(regionId, "region-frozen:$reason")
         plugin.raceModes().forceEnd(regionId, "region-frozen:$reason")

@@ -11,9 +11,35 @@ permissions:
   regions.use:
     default: true
     description: >-
-      Take part in Region activities (/regions game ... ready|status).
+      Take part in Region activities (/regions game ... join|ready|spectate|status).
       Revoke it to keep a group out of everyone else's events; hosting is gated
       separately by region ownership, not by this node.
+    children:
+      regions.game.view: true
+      regions.game.join: true
+      regions.game.ready: true
+      regions.game.spectate: true
+      regions.language.select: true
+  regions.game.view:
+    default: true
+    description: View a venue's match status (/regions game <id> status).
+  regions.game.join:
+    default: true
+    description: >-
+      Sign up for a venue's match (/regions game <id> join). Entering the area is
+      not consent; only this node plus the command signs you up. You can always
+      leave a match you joined.
+  regions.game.ready:
+    default: true
+    description: Ready up / unready for a match (/regions game <id> ready|unready).
+  regions.game.spectate:
+    default: true
+    description: Watch a running match from the configured spectator spot (/regions game <id> spectate).
+  regions.language.select:
+    default: true
+    description: >-
+      Pick your own display language (/regions language zh_CN|en_US|auto).
+      Only does anything while config.yml has locale-mode: player.
   regions.admin:
     default: op
     description: RuleGems ruler access; Region ownership is still required.
@@ -28,6 +54,14 @@ permissions:
       regions.region.publish: true
       regions.region.rollback: true
       regions.region.archive: true
+      regions.game.start: true
+      regions.game.end: true
+  regions.game.start:
+    default: false
+    description: Judge start for an authorised venue; venue-owner/superadmin judgement still applies.
+  regions.game.end:
+    default: false
+    description: Force-end a match; venue-owner/superadmin judgement still applies.
   regions.superadmin:
     default: op
     description: Emergency global Regions administration and ownership bypass.

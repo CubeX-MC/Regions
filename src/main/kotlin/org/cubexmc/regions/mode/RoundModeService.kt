@@ -9,6 +9,7 @@ import org.bukkit.event.entity.PlayerDeathEvent
 import org.bukkit.event.player.PlayerMoveEvent
 import org.bukkit.inventory.ItemStack
 import org.cubexmc.regions.RegionsPlugin
+import org.cubexmc.regions.match.GearSnapshot
 import org.cubexmc.regions.model.EffectConfig
 import org.cubexmc.regions.model.EffectScope
 import org.cubexmc.regions.model.RegionDefinition
@@ -22,7 +23,7 @@ import kotlin.math.ceil
 class RoundModeService(private val plugin: RegionsPlugin) {
     private val states: ConcurrentHashMap<String, RoundState> = ConcurrentHashMap()
     private val endingRegions: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private val pendingRespawnRestores: ConcurrentHashMap<UUID, CombatModeService.GearSnapshot> = ConcurrentHashMap()
+    private val pendingRespawnRestores: ConcurrentHashMap<UUID, GearSnapshot> = ConcurrentHashMap()
     private val gearStore = CombatGearStore(plugin, "round-escrow.yml")
 
     init {
@@ -41,22 +42,22 @@ class RoundModeService(private val plugin: RegionsPlugin) {
             return false
         }
         if (endingRegions.contains(region.id)) {
-            plugin.sendGame(player, plugin.gameText("game.round.restoring", mapOf("name" to region.name)))
+            plugin.sendGame(player, "game.round.restoring", mapOf("name" to region.name))
             return false
         }
         val state = state(region)
         if (state.active) {
-            plugin.sendGame(player, plugin.gameText("game.round.in-progress", mapOf("name" to region.name)))
+            plugin.sendGame(player, "game.round.in-progress", mapOf("name" to region.name))
             return false
         }
         val maxPlayers = region.mode?.values?.get("max-players")?.toIntOrNull()?.coerceAtLeast(0) ?: 0
         if (maxPlayers > 0 && !state.players.contains(player.uniqueId) && state.players.size >= maxPlayers) {
-            plugin.sendGame(player, plugin.gameText("game.round.full", mapOf("name" to region.name)))
+            plugin.sendGame(player, "game.round.full", mapOf("name" to region.name))
             return false
         }
         state.players.add(player.uniqueId)
         state.ready.remove(player.uniqueId)
-        plugin.sendGame(player, plugin.gameText("game.round.joined", mapOf("name" to region.name, "id" to region.id)))
+        plugin.sendGame(player, "game.round.joined", mapOf("name" to region.name, "id" to region.id))
         return true
     }
 
@@ -90,7 +91,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
             return false
         }
         event.isCancelled = true
-        plugin.sendGame(player, plugin.gameText("game.round.wait-hiding"))
+        plugin.sendGame(player, "game.round.wait-hiding", emptyMap())
         return true
     }
 
@@ -123,7 +124,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
         state.ready.remove(player.uniqueId)
         state.roles.remove(player.uniqueId)
         state.found.remove(player.uniqueId)
-        plugin.sendGame(player, plugin.gameText("game.round.removed"))
+        plugin.sendGame(player, "game.round.removed", emptyMap())
         maybeEndHideAndSeek(state, "death")
         return true
     }
@@ -143,15 +144,15 @@ class RoundModeService(private val plugin: RegionsPlugin) {
         }
         val state = state(region)
         if (!state.players.contains(player.uniqueId)) {
-            plugin.sendGame(player, plugin.gameText("game.round.not-inside"))
+            plugin.sendGame(player, "game.round.not-inside", emptyMap())
             return true
         }
         if (state.active) {
-            plugin.sendGame(player, plugin.gameText("game.round.already-started"))
+            plugin.sendGame(player, "game.round.already-started", emptyMap())
             return true
         }
         state.ready.add(player.uniqueId)
-        broadcast(state, plugin.gameText("game.round.ready", mapOf("player" to player.name, "current" to state.ready.size.toString(), "total" to state.players.size.toString())))
+        broadcast(state, "game.round.ready", mapOf("player" to player.name, "current" to state.ready.size.toString(), "total" to state.players.size.toString()))
         if (startMode(region) == "vote" && state.ready.size >= requiredVotes(region, state)) {
             start(region, state, "vote")
         }
@@ -226,15 +227,27 @@ class RoundModeService(private val plugin: RegionsPlugin) {
         restoreStored(player, reason)
 
     @Synchronized
-    fun status(regionId: String): String {
-        val state = states[regionId] ?: return "round idle"
+    fun status(regionId: String): GameStatus {
+        val modeType = plugin.modeTypeOf(regionId)
+        val state = states[regionId]
+            ?: return GameStatus(regionId, modeType, GamePhase.IDLE)
+        if (!state.active) {
+            return GameStatus(regionId, modeType, GamePhase.WAITING, players = state.players.size, ready = state.ready.size)
+        }
         val hiders = state.roles.values.count { it == RoundRole.HIDER }
         val seekers = state.roles.values.count { it == RoundRole.SEEKER }
-        return if (state.active) {
-            "round active seekers=$seekers hiders=$hiders found=${state.found.size} released=${state.seekersReleased}"
-        } else {
-            "round waiting ready=${state.ready.size}/${state.players.size}"
-        }
+        return GameStatus(
+            regionId,
+            modeType,
+            GamePhase.RUNNING,
+            players = state.players.size,
+            extra = mapOf(
+                "seekers" to seekers,
+                "hiders" to hiders,
+                "found" to state.found.size,
+                "released" to if (state.seekersReleased) 1 else 0,
+            ),
+        )
     }
 
     @Synchronized
@@ -244,7 +257,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
         }
         val minPlayers = region.mode?.values?.get("min-players")?.toIntOrNull()?.coerceAtLeast(2) ?: 2
         if (state.players.size < minPlayers) {
-            broadcast(state, plugin.gameText("game.round.waiting-players", mapOf("current" to state.players.size.toString(), "required" to minPlayers.toString())))
+            broadcast(state, "game.round.waiting-players", mapOf("current" to state.players.size.toString(), "required" to minPlayers.toString()))
             return
         }
         state.active = true
@@ -271,7 +284,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
             })
         }
         val hideSeconds = hideSeconds(region)
-        broadcast(state, plugin.gameText("game.round.started", mapOf("name" to region.name, "seconds" to hideSeconds.toString())))
+        broadcast(state, "game.round.started", mapOf("name" to region.name, "seconds" to hideSeconds.toString()))
         plugin.regionScheduler().runGlobalLater(Runnable {
             if (states[region.id] === state && state.active) {
                 releaseSeekers(region.id)
@@ -282,7 +295,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
             plugin.regionScheduler().runGlobalLater(Runnable {
                 val current = states[region.id]
                 if (current === state && current.active) {
-                    broadcast(current, plugin.gameText("game.round.hiders-win-timeout"))
+                    broadcast(current, "game.round.hiders-win-timeout", emptyMap())
                     end(region.id, "time-limit")
                 }
             }, roundSeconds * 20L)
@@ -303,7 +316,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
         val role = state.roles[player.uniqueId] ?: return
         plugin.sessions().setMetadata(player, region.id, "round_role", role.key)
         if (shouldReplaceGear(region) && !state.gear.containsKey(player.uniqueId)) {
-            val snapshot = CombatModeService.GearSnapshot.capture(player, outsideLocation(region))
+            val snapshot = GearSnapshot.capture(player, outsideLocation(region))
             if (state.gear.putIfAbsent(player.uniqueId, snapshot) == null) {
                 gearStore.put(player.uniqueId, region.id, snapshot)
             }
@@ -314,14 +327,14 @@ class RoundModeService(private val plugin: RegionsPlugin) {
                 if (shouldReplaceGear(region)) {
                     applyKit(player, region.mode?.values?.get("seeker-kit") ?: region.mode?.values?.get("kit"))
                 }
-                plugin.sendGame(player, plugin.gameText("game.round.role-seeker"))
+                plugin.sendGame(player, "game.round.role-seeker", emptyMap())
             }
             RoundRole.HIDER -> {
                 applyHiderVisual(player, region)
                 if (shouldReplaceGear(region)) {
                     applyKit(player, region.mode?.values?.get("hider-kit") ?: region.mode?.values?.get("kit"))
                 }
-                plugin.sendGame(player, plugin.gameText("game.round.role-hider"))
+                plugin.sendGame(player, "game.round.role-hider", emptyMap())
             }
         }
     }
@@ -333,7 +346,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
             return
         }
         state.seekersReleased = true
-        broadcast(state, plugin.gameText("game.round.seek-start"))
+        broadcast(state, "game.round.seek-start", emptyMap())
     }
 
     @Synchronized
@@ -348,14 +361,14 @@ class RoundModeService(private val plugin: RegionsPlugin) {
         if (region.mode?.values?.get("found-becomes-seeker")?.toBooleanStrictOrNull() != false) {
             state.roles[hider.uniqueId] = RoundRole.SEEKER
             applySeekerVisual(hider, region)
-            plugin.sendGame(hider, plugin.gameText("game.round.found-become-seeker", mapOf("seeker" to seeker.name)))
+            plugin.sendGame(hider, "game.round.found-become-seeker", mapOf("seeker" to seeker.name))
         } else {
             state.roles.remove(hider.uniqueId)
             outsideLocation(region)?.let { plugin.regionScheduler().teleportAsync(hider, it) }
-            plugin.sendGame(hider, plugin.gameText("game.round.found-eliminated", mapOf("seeker" to seeker.name)))
+            plugin.sendGame(hider, "game.round.found-eliminated", mapOf("seeker" to seeker.name))
         }
         plugin.triggers().fire(RegionTrigger.ON_FOUND, hider, region)
-        broadcast(state, plugin.gameText("game.round.found", mapOf("player" to hider.name, "seeker" to seeker.name)))
+        broadcast(state, "game.round.found", mapOf("player" to hider.name, "seeker" to seeker.name))
         plugin.log().debug("Hide-and-seek found ${hider.name} by ${seeker.name} in ${state.regionId}: $reason")
         maybeEndHideAndSeek(state, "all-found-check")
     }
@@ -367,10 +380,10 @@ class RoundModeService(private val plugin: RegionsPlugin) {
         val remainingHiders = state.players.count { state.roles[it] == RoundRole.HIDER && !state.found.contains(it) }
         val seekers = state.players.count { state.roles[it] == RoundRole.SEEKER }
         if (remainingHiders <= 0) {
-            broadcast(state, plugin.gameText("game.round.seekers-win"))
+            broadcast(state, "game.round.seekers-win", emptyMap())
             end(state.regionId, reason)
         } else if (seekers <= 0) {
-            broadcast(state, plugin.gameText("game.round.hiders-win-abandoned"))
+            broadcast(state, "game.round.hiders-win-abandoned", emptyMap())
             end(state.regionId, reason)
         }
     }
@@ -412,7 +425,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
                             plugin.triggers().fire(RegionTrigger.ON_MODE_END, player, region)
                         }
                         restoreRoundState(player, state, teleportOut = false, reason = reason)
-                        plugin.sendGame(player, plugin.gameText("game.round.ended"))
+                        plugin.sendGame(player, "game.round.ended", emptyMap())
                     } finally {
                         if (remaining.decrementAndGet() == 0) endingRegions.remove(regionId)
                     }
@@ -475,7 +488,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
         check(result.success) { result.reason.ifBlank { "Round visual effect could not be applied." } }
     }
 
-    private fun restoreSnapshot(player: Player, snapshot: CombatModeService.GearSnapshot) {
+    private fun restoreSnapshot(player: Player, snapshot: GearSnapshot) {
         player.inventory.contents = snapshot.contents
         player.inventory.armorContents = snapshot.armor
         player.inventory.setItemInOffHand(snapshot.offhand)
@@ -562,11 +575,11 @@ class RoundModeService(private val plugin: RegionsPlugin) {
     private fun state(region: RegionDefinition): RoundState =
         states.computeIfAbsent(region.id) { RoundState(region.id) }
 
-    private fun broadcast(state: RoundState, message: String) {
+    private fun broadcast(state: RoundState, key: String, placeholders: Map<String, String> = emptyMap()) {
         for (playerId in state.players.toList()) {
             val player = plugin.server.getPlayer(playerId) ?: continue
             plugin.regionScheduler().runAtEntity(player, Runnable {
-                plugin.sendGame(player, message)
+                plugin.sendGame(player, key, placeholders)
             })
         }
     }
@@ -608,7 +621,7 @@ class RoundModeService(private val plugin: RegionsPlugin) {
         val ready: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
         val found: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
         val roles: ConcurrentHashMap<UUID, RoundRole> = ConcurrentHashMap()
-        val gear: ConcurrentHashMap<UUID, CombatModeService.GearSnapshot> = ConcurrentHashMap()
+        val gear: ConcurrentHashMap<UUID, GearSnapshot> = ConcurrentHashMap()
         @Volatile
         var active: Boolean = false
         @Volatile

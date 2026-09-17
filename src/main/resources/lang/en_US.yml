@@ -1,4 +1,4 @@
-lang-version: 7
+lang-version: 8
 
 prefix: "<#69DB7C>[Regions] "
 help: |
@@ -7,7 +7,10 @@ help: |
   <#69DB7C>/regions create \<id> \<name> --land \<land> [area] <#CFD8DC>- Create a venue on your own Lands area
   <#69DB7C>/regions bind \<id> cuboid|lands ... <#CFD8DC>- Bind a region source
   <#69DB7C>/regions mode set \<id> dual_pvp|union_war|run_race|boat_race|horse_race|hide_and_seek ... <#CFD8DC>- Set gameplay mode
-  <#69DB7C>/regions game \<id> ready/start/status/end <#CFD8DC>- Ready, judge-start, inspect, or end a game
+  <#69DB7C>/regions game \<id> join|leave|ready|unready|spectate|status|result <#CFD8DC>- Sign up, leave, ready, spectate, or inspect a match
+  <#69DB7C>/regions game \<id> teams \<nationA> \<nationB> <#CFD8DC>- Venue owner picks the two nations for a nation battle
+  <#69DB7C>/regions game \<id> start|end <#CFD8DC>- Judge-start or force-end a match
+  <#69DB7C>/regions language \<zh_CN|en_US|auto> <#CFD8DC>- Pick your own display language (needs locale-mode: player)
   <#69DB7C>/regions flag set \<id> \<flag> \<value> <#CFD8DC>- Set a rule flag
   <#69DB7C>/regions effect add \<id> \<effect> [args] <#CFD8DC>- Add a scoped effect
   <#69DB7C>/regions trial \<id> [start|stop] <#CFD8DC>- Isolate draft Effect and Flag testing to yourself
@@ -23,7 +26,7 @@ help-publishing: |
   <#69DB7C>/regions history \<id> <#CFD8DC>- View the immutable revision history
   <#69DB7C>/regions rollback \<id> \<revision> <#CFD8DC>- Publish a historical revision as a new one
   <#69DB7C>/regions archive \<id> <#CFD8DC>- Archive a venue
-help-player: "<#CFD8DC>Walk into a configured land or venue to experience Regions. Duel, race, and mini-game venues will prompt you to run <#69DB7C>/regions game \\<venue> ready<#CFD8DC> when confirmation is needed."
+help-player: "<#CFD8DC>Run <#69DB7C>/regions<#CFD8DC> to open the activity lobby, or walk into a configured land. Walking into a combat venue only prompts you once; sign up with <#69DB7C>/regions game \\<venue> join<#CFD8DC>, then <#69DB7C>ready<#CFD8DC> once you are on your spot. Use <#69DB7C>leave<#CFD8DC> to drop out and <#69DB7C>spectate<#CFD8DC> to watch. When the server enables per-player language, <#69DB7C>/regions language \\<zh_CN|en_US|auto><#CFD8DC> switches yours."
 reloaded: "<#69DB7C>Regions reloaded."
 reload-failed: "<#E63946>Regions reload failed; the running state is unchanged. Failed stages: <stages>"
 no-permission: "<#E63946>You do not have permission."
@@ -97,25 +100,103 @@ command:
   trial-failed: "<red>Trial failed: <reason>"
   game-ended: "<green>Ended the match in <id>."
   game-not-running: "<yellow><id> has no match in progress."
+  game-end-confirm: "<yellow>This ends the <mode> in <id> (revision <revision>) immediately; <participants> participant(s) will be settled and have their gear restored. Run the same command again within 30 seconds to confirm."
   game-status: "<yellow><id>: <state>"
+  game-teams: "<yellow><id> current pairing: <gray>A <a> <yellow>/ <gray>B <b>"
+  game-teams-set: "<green>Set the pairing for <id> to <a> vs <b>."
+  game-teams-failed: "<red>Cannot set the pairing for <id> right now (not a nation battle, already started, or players have signed up)."
+  game-result: "<yellow><id> result: <gray><outcome> <dark_gray>(<reason>) <gray>winner: <winner> <gray>reward: <reward>"
 
 game:
   combat:
     restoring: "<yellow><name> is still restoring the previous match; come back in a moment."
     in-progress: "<yellow><name> has already started; you will not join the current match."
     full: "<red><name> is full."
-    not-combat: "<red>This region is not a combat mode."
-    not-inside: "<red>You are not inside this venue."
     already-started: "<yellow>The match has already started."
     ready: "<green><player> is ready (<current>/<total>)"
-    ready-prompt: "<yellow><name> has enough players. Run <green>/regions game <id> ready <yellow>to confirm."
-    removed: "<yellow>You were removed from this match; your pre-match state returns on respawn."
     started: "<red>Fight!"
     ended: "<yellow>The match has ended."
-    waiting-players: "<yellow>More players need to enter the venue (<current>/<required>)."
-    waiting-unions: "<yellow>Union war needs at least <required> different unions present; <current> detected."
-    not-ready: "<yellow>The start conditions are not met yet."
-    union-winner: "<gold>Union war over. Winning union: <yellow><union>"
+  match:
+    finishing: "<yellow>Settling up: <pending> player(s) still need their gear restored (reward: <reward>)."
+    enter-prompt: "<yellow>This is the venue for <name>. Run <green>/regions game <id> join <yellow>to sign up; walking in does not enter you."
+    rejoin: "<green>You are back at <name> (<state>)."
+    join:
+      ok: "<green>You signed up for <name>. Once you are there run <yellow>/regions game <id> ready<green>."
+      broadcast: "<green><player> signed up (<current>/<required>)"
+      leave: "<yellow><player> left the roster."
+      unknown-region: "<red>No such venue: <id>."
+      unavailable: "<red>That venue is not open for sign-ups."
+      not-a-match: "<red>That venue is not a combat mode."
+      in-progress: "<yellow>The match has started; wait for the next one or spectate."
+      already-joined: "<yellow>You are already on this match's roster."
+      restoring: "<yellow>Your gear is still queued for recovery from an earlier match; sign up again once that finishes."
+      full: "<red>This match is full."
+      team-full: "<red>The nation you picked already has a full roster."
+      need-nation: "<red>Nation battles need you to be in a land that belongs to a nation."
+      union-unavailable: "<red>The union data source is unavailable (<reason>); try again later."
+      team-unknown: "<red>No such nation: <team>"
+      team-not-in-match: "<red>This match only accepts these nations: <team>"
+      choose-nation: "<yellow>You belong to several nations; pick the side you will fight for in <name>:"
+      choose-nation-line: "<gray>- <yellow><name> <dark_gray>(<id>) <gray>run <click:run_command:'<command>'><yellow><command></click>"
+    ready:
+      not-a-match: "<red>This mode has no ready step."
+      not-joined: "<yellow>You have not signed up yet. Run <green>/regions game <id> join<yellow>."
+    unready: "<yellow><player> is no longer ready (<current> ready)."
+    unready.not-possible: "<yellow>You cannot unready right now."
+    leave.not-joined: "<yellow>You are not on the roster for <id>."
+    spectate:
+      not-a-match: "<red>That venue is not a combat mode."
+      no-match: "<yellow>There is no match to watch here right now."
+      is-participant: "<yellow>You are competing in this match."
+      joined: "<green>You joined the spectator list for <id>; you will not take part in the fight."
+    waiting-players: "<yellow>Waiting for more sign-ups (<current>/<required>)."
+    waiting-ready: "<yellow>Waiting for these players to ready up: <waiting>"
+    waiting-roster: "<yellow>Both sides must be full and equal before the match can start."
+    waiting-teams: "<yellow>The venue owner still has to pick the two nations for this match."
+    diplomacy:
+      not-enemies: "<yellow>This venue is set to enemy-only, but the two nations are not hostile."
+      unverifiable: "<yellow>This venue is set to enemy-only, but the union provider cannot verify the relation; the match will not start."
+    preparing: "<yellow>Storing your gear and teleporting you to a spawn point…"
+    gear-ready: "<green>Your gear is stored; waiting for the other players."
+    countdown: "<red>The fight starts in <seconds> seconds!"
+    started: "<red>Round <round>/<total> begins!"
+    round.won: "<gold>Round <round> over. Winner: <yellow><winner> <gray>(<reason>)"
+    round.draw: "<gold>Round <round> was a draw <gray>(<reason>)"
+    intermission: "<yellow><seconds> seconds between rounds; the next one starts right after."
+    eliminated: "<red>You are out (<reason>). <killer>"
+    eliminated.broadcast: "<gray><player> is out; <alive> still standing."
+    restored: "<green>Your pre-match state has been restored (reward: <reward>)."
+    result:
+      win: "<gold>You won this match! Beaten: <winner> <gray>(<reason>, reward: <reward>)"
+      team-win: "<gold>Your nation won this match! <gray>(<reason>, reward: <reward>)"
+      lose: "<yellow>The match is over. Winner: <winner> <gray>(<reason>, reward: <reward>)"
+      draw: "<yellow>The match ended in a draw <gray>(<reason>, reward: <reward>)"
+      aborted: "<red>The match was aborted <gray>(<reason>, reward: <reward>)"
+      none: "<gray>This venue has no match result yet."
+    actionbar:
+      preparing: "<yellow>Preparing gear and spawn points…"
+      starting: "<red>Starting now!"
+      running: "<yellow>Alive <alive>/<total> · round <round> · <time>s left"
+    reason:
+      mutual: "mutual elimination"
+      round-timeout: "round time limit"
+      opponent-down: "opponent eliminated"
+      rounds-won: "won the required rounds"
+      rounds-exhausted: "rounds exhausted without a winner"
+      timeout: "time limit reached"
+      nation-wiped: "the other nation was wiped out"
+      last-standing: "last player standing"
+      death: "killed"
+      left: "left the venue"
+      disconnect: "disconnected"
+      forced: "force-ended by an admin"
+      start-aborted: "the start sequence failed"
+      server-stop: "server shutdown"
+      leave-command: "left voluntarily"
+      region-missing: "the venue no longer exists"
+      prepare-failed: "gear or teleport failed"
+      roster-changed: "the roster changed"
+      prepare-timeout: "the start sequence timed out"
   race:
     restoring: "<yellow><name> is still finishing the previous race; come back in a moment."
     in-progress: "<yellow><name> has already started; you will join the next race."
@@ -304,6 +385,16 @@ gui:
       name: "<red>End my isolated trial"
       lore:
         - "<gray>Restores your own state immediately."
+    advanced: "<yellow>Advanced settings"
+    advanced.back: "<red>Back to the basic page"
+    publish.no-draft: "<gray>This venue has no draft yet; change a setting or apply a template first."
+    trial-no-draft: "<gray>Create a draft before running an isolated trial."
+    preview-diff: "<yellow>View the full diff"
+    manage: "<yellow>Match management"
+    manage-status: "<yellow><id> status: <state>"
+    manage-roster: "<gray>Roster (<count>): <players>"
+    manage-result: "<gray>Last result: <outcome> <dark_gray>(<reason>)"
+    manage-hint: "<gray>Start with <yellow>/regions game <id> start<gray>; force-end with <yellow>/regions game <id> end<gray> (asks for confirmation)."
     withdrawn: "<yellow>Region <id> was withdrawn back to a draft."
     withdraw-failed: "<red>Withdraw failed: <reason>"
   trial:
@@ -350,33 +441,41 @@ gui:
     judge-unknown: "<red>No such player: <name>. They must have joined this server at least once."
     type:
       free_event:
-        name: "free_event"
+        name: "Free event"
         lore:
           - "<gray>General event venue driven by flags and effects only."
       run_race:
-        name: "run_race"
+        name: "Running race"
         lore:
           - "<gray>Foot race; participants may not ride a vehicle."
       dual_pvp:
-        name: "dual_pvp"
+        name: "Duel"
         lore:
           - "<gray>Two or more players ready up after entering."
           - "<gray>Supports kit, armor and min-players."
       boat_race:
-        name: "boat_race"
+        name: "Boat race"
         lore:
           - "<gray>Boat race; participants must be in a boat."
       union_war:
-        name: "union_war"
+        name: "Nation battle"
         lore:
           - "<gray>Uses the UnionProvider to resolve unions."
           - "<gray>Supports min-unions, kit and armor."
       horse_race:
-        name: "horse_race"
+        name: "Horse race"
         lore:
           - "<gray>Horse race; participants must be mounted."
       hide_and_seek:
-        name: "hide_and_seek"
+        name: "Hide and seek"
+        lore:
+          - "<gray>Seekers hunt the hiders; hiders win by outlasting the round."
+          - "<gray>Configurable seeker count, hiding time and round length."
+      free_for_all:
+        name: "Last player standing"
+        lore:
+          - "<gray>One life each; the last player standing wins, ties are shared."
+          - "<gray>Configurable player range, time limit and spawn points; no reward source."
         lore:
           - "<gray>Hide and seek with automatic role assignment."
           - "<gray>Seekers tag hiders by attacking them; no damage is dealt."
@@ -472,6 +571,36 @@ gui:
     timeout-seconds:
       name: "<yellow>Match timeout: <value>s"
       lore: ["<gray>Used by race modes. Left click +60s, right click -60s.", "<gray>Minimum 60s."]
+    add-spawn:
+      name: "<yellow>Add spawn point (<count> so far)"
+      lore:
+        - "<gray>Stand on the spot and click to append your position."
+        - "<gray>Duel needs exactly two; last-player-standing needs one per possible player."
+        - "<gray>Current position: <location>"
+    add-spawn-a:
+      name: "<yellow>Add team A spawn (<count> so far)"
+      lore:
+        - "<gray>Stand on the spot and click to append it to team A's list."
+        - "<gray>One distinct point per team member."
+        - "<gray>Current position: <location>"
+    add-spawn-b:
+      name: "<yellow>Add team B spawn (<count> so far)"
+      lore:
+        - "<gray>Stand on the spot and click to append it to team B's list."
+        - "<gray>One distinct point per team member."
+        - "<gray>Current position: <location>"
+    clear-spawns:
+      name: "<red>Clear spawn points"
+      lore: ["<gray>Removes every spawn point configured for this mode."]
+    best-of:
+      name: "<yellow>Series: first to <value>"
+      lore: ["<gray>Click to switch between 1 (single round) and 3 (first to two)."]
+    team-size:
+      name: "<yellow>Players per side: <value>"
+      lore: ["<gray>How many players each nation fields. Left click +1, right click -1.", "<gray>Range 2-10."]
+    diplomacy:
+      name: "<yellow>Diplomacy: <value>"
+      lore: ["<gray>agreed = arranged match (default); enemy-only = both nations must have a verified hostile relation, otherwise the match will not start."]
     advanced:
       name: "<yellow>Advanced parameters"
       lore:
@@ -490,17 +619,6 @@ gui:
         - "<gray>Click to enter \\<flag> \\<value> [key=value...]."
         - "<gray>For example commands blocklist values=/spawn,/home."
     usage: "<red>Enter \\<flag> \\<value>."
-    key:
-      pvp: "pvp"
-      fly: "fly"
-      vanish: "vanish"
-      item_drop: "item_drop"
-      item_pickup: "item_pickup"
-      commands: "commands"
-    value:
-      allow: "allow"
-      deny: "deny"
-      pass: "pass"
   effect:
     title: "<dark_green>Effects: <id>"
     entry:
@@ -564,21 +682,6 @@ gui:
       name: "<red>Clear all triggers"
     usage: "<red>Enter \\<trigger> \\<action>."
     unknown: "<red>Unknown trigger: <trigger>"
-    key:
-      on_enter: "on_enter"
-      on_leave: "on_leave"
-      on_death: "on_death"
-      on_kill: "on_kill"
-      on_respawn: "on_respawn"
-      on_interact: "on_interact"
-      on_command: "on_command"
-      on_timer: "on_timer"
-      on_mode_start: "on_mode_start"
-      on_mode_end: "on_mode_end"
-      on_role_assigned: "on_role_assigned"
-      on_found: "on_found"
-      on_checkpoint: "on_checkpoint"
-      on_finish: "on_finish"
   publish:
     title: "<dark_green>Publish preview: <id>"
     change:
@@ -644,6 +747,188 @@ gui:
       lore:
         - "<gray>Page <page>/<pages>"
     owner-changed: "<yellow>Ownership of that area may have just changed; the list was refreshed."
+  lobby:
+    title: "<dark_green>Activity lobby <gray><page>/<pages>"
+    entry:
+      name: "<aqua><name>"
+      lore:
+        - "<gray>Mode: <mode>"
+        - "<gray>Status: <status>"
+    reason:
+      joinable: "<green>Joinable: walk into the venue to sign up"
+      running: "<yellow>Match running; wait for the next one"
+      restoring: "<yellow>Restoring the previous match; join later"
+      full: "<red>Full; come back later"
+      source-unavailable: "<red>Missing dependency: <source>"
+      unions-unavailable: "<red>Needs a union data source (Lands)"
+    empty:
+      name: "<red>No joinable venues yet"
+      lore:
+        - "<gray>Venues appear here once owners publish them."
+    how-to-join: "<green>Walk into venue <id>, run <yellow>/regions game <id> join <green>to sign up, then <yellow>/regions game <id> ready <green>once on your spot."
+    my-regions:
+      name: "<yellow>My venues"
+      lore:
+        - "<gray>Open the venue management UI."
+    filter:
+      mode:
+        name: "<yellow>Mode filter: <mode>"
+        lore:
+          - "<gray>Click to cycle by mode; <count> venue(s) currently match."
+      all: "All modes"
+      joinable:
+        name: "<yellow>Joinable only: <value>"
+        lore: ["<gray>Click to keep only venues you can sign up for right now."]
+      clear:
+        name: "<red>Clear filters"
+        lore: ["<gray>Back to every venue."]
+      empty:
+        name: "<red>No venue matches the filter"
+        lore: ["<gray>Pick another mode or turn off \"joinable only\"."]
+  wizard:
+    title: "<dark_green>Create a venue: pick a game mode"
+    back-to-mode: "<red>Back to mode selection"
+    no-template: "<yellow>No template exists for this mode; a draft was created with the <mode> defaults, just fill in the required items."
+    back-to-area: "<red>Back to land selection"
+    settings:
+      title: "<dark_green>Create a venue: <name>"
+      progress: "<yellow>Required items <done>/<total>"
+      ready:
+        - "<green>Everything required is set; you can review and publish."
+      not-ready:
+        - "<red>Still missing: <missing>"
+        - "<gray>Fill these in before the review page."
+      respawn:
+        name: "<yellow>Return / spectator point: <value>"
+        lore:
+          - "<gray>Stand on the spot and click to set it."
+          - "<gray>Current position: <location>"
+      spawn:
+        name: "<yellow>Spawn points (<count> so far)"
+        lore:
+          - "<gray>Stand on the spot and click to append one."
+          - "<gray>Current position: <location>"
+      spawn-b:
+        name: "<yellow>Team B spawn points (<count> so far)"
+        lore:
+          - "<gray>Stand on the spot and click to append one for team B."
+          - "<gray>Current position: <location>"
+      roster:
+        name: "<yellow>Roster: <value>"
+        lore: ["<gray>Click to adjust. Nation battles set players per side (2-10); brawls set the minimum."]
+      time:
+        name: "<yellow>Time limit: <value>"
+        lore: ["<gray>Click to cycle 120/180/300/600 seconds."]
+      continue:
+        name: "<green>Continue: review and publish"
+        lore: ["<gray>Available once every required item is set."]
+      rename:
+        name: "<yellow>Rename"
+        lore: ["<gray>Click, then type the new name in chat."]
+      blocked: "<yellow>Still required: <missing>"
+      stale: "<red>This draft changed while you were editing; it was reloaded to the newest revision."
+      field:
+        respawn: "return point"
+        spawns: "spawn points"
+        team-spawns: "team B spawn points"
+        kit: "gear preset"
+        roster: "roster"
+        time: "time limit"
+    mode:
+      name: "<aqua><mode>"
+      unavailable:
+        reason:
+          - "<red>Dependency missing: needs a union data source (Lands)"
+      free_event:
+        summary:
+          - "<gray>A non-combat free-event area."
+      run_race:
+        summary:
+          - "<gray>Multi-player foot race; ranked by finish order."
+      dual_pvp:
+        summary:
+          - "<gray>1v1 duel; first to defeat the opponent wins."
+      boat_race:
+        summary:
+          - "<gray>Multi-player boat race; ranked by finish order."
+      union_war:
+        summary:
+          - "<gray>Two nations field equal teams; last team standing wins."
+      horse_race:
+        summary:
+          - "<gray>Multi-player horse race; ranked by finish order."
+      free_for_all:
+        summary:
+          - "<gray>One life each: the last player standing wins (4-16 players)."
+      hide_and_seek:
+        summary:
+          - "<gray>Seekers hunt hiders; hiders win by surviving the round."
+    issue-name: "<severity> item"
+    fix-hint:
+      goto: "<yellow>Click to open <target> settings; the mode page returns here"
+      none:
+        - "<gray>No in-page fix for this one; follow the description or ask an admin."
+    fix-target:
+      mode: "game mode"
+      rules: "rules"
+      effects: "effects"
+      triggers: "triggers"
+      source: "source"
+  game:
+    title: "<dark_green><name> · Match signup"
+    rules:
+      gear-escrow: "<gray>Your gear is escrowed on start and a kit is handed out; restored after the match."
+      gear-own: "<gray>You use your own gear; death drops follow server rules."
+      gear-restore: "<gray>Your inventory and experience are restored after the match."
+      gear-keep: "<gray>Your gear is not replaced; gains and losses follow server rules."
+      duel-life: "<gray>One life per duel: losing a round costs you that round."
+      duel-rounds: "<gray>Best of <rounds>, <seconds> seconds per round."
+      nation-life: "<gray>One life per nation battle: a fully eliminated nation loses."
+      nation-roster: "<gray><size> players per side; both sides must be full."
+      ffa-life: "<gray>One life each: the last player standing wins."
+      round: "<gray>Round based: <seconds> seconds per round."
+      timeout: "<gray>Time limit <seconds> seconds; ties resolve by the rules."
+      min-players: "<gray>Needs at least <count> players to start."
+      leave-warning: "<red>Leaving or disconnecting after the start counts as a forfeit."
+    join:
+      name: "<green>Sign up"
+      lore:
+        - "<gray>Read the rules above; signing up means you agree."
+        - "<gray>Ready up once you are at the venue."
+    ready:
+      name: "<green>Ready"
+      lore:
+        - "<gray>The match starts once the roster is full and everyone is ready."
+    unready:
+      name: "<gray>Not ready"
+      lore:
+        - "<gray>You can unready any time before the start."
+    leave:
+      name: "<red>Leave the match"
+      lore:
+        - "<red>Leaving after the start counts as a forfeit."
+    spectate:
+      name: "<yellow>Spectate"
+      lore:
+        - "<gray>Watch from outside; you take no part in the fight."
+    participant:
+      name: "<aqua><player>"
+      lore:
+        - "<gray>State: <state>"
+    team:
+      name: "<aqua><team>"
+      lore:
+        - "<gray>Click to fight for this nation."
+    result:
+      name: "<gold>Last match: <outcome>"
+      lore:
+        - "<gray>Reason: <reason>"
+        - "<gray>Reward: <reward>"
+    how-to-join: "<yellow>Walk into the <id> venue and run /regions game <id> join to sign up."
+    back-to-lobby: "<yellow>Back to the activity lobby"
+  advanced:
+    title: "<dark_green>Advanced settings: <id>"
+    back: "<red>Back to the basic page"
   template:
     title: "<dark_green>Select a venue template <page>/<pages>"
     entry:
@@ -697,3 +982,321 @@ gui:
     horse: "horse"
     minecart: "minecart"
     ignore: "ignored"
+labels:
+  common:
+    "on": "<green>On"
+    "off": "<gray>Off"
+    allow: "Allow"
+    deny: "Deny"
+    pass: "Inherit"
+    unknown: "Unknown"
+  source:
+    lands: "Lands area"
+    cuboid: "Cuboid venue"
+  mode:
+    free_event: "Free event"
+    dual_pvp: "Duel"
+    union_war: "Nation battle"
+    free_for_all: "Last player standing"
+    run_race: "Running race"
+    boat_race: "Boat race"
+    horse_race: "Horse race"
+    hide_and_seek: "Hide and seek"
+  flag:
+    pvp: "PvP"
+    fly: "Flight"
+    vanish: "Vanish protection"
+    item_drop: "Drop items"
+    item_pickup: "Pick up items"
+    commands: "Commands"
+  effect:
+    scale: "Size scaling"
+    potion: "Potion effects"
+    walk_speed: "Walk speed"
+    fly_speed: "Fly speed"
+    allow_flight: "Flight ability"
+    glowing: "Glowing"
+    invisibility_suppression: "Glow reveal"
+  action:
+    message: "Send message"
+    title: "Title"
+    sound: "Play sound"
+    console_command: "Console command"
+    player_command: "Player command"
+    effect_apply: "Apply effect"
+    effect_clear: "Clear effect"
+    broadcast: "Broadcast"
+    teleport: "Teleport"
+    heal: "Heal"
+    feed: "Feed"
+    extinguish: "Extinguish"
+    give_item: "Give item"
+    take_item: "Take item"
+    set_metadata: "Set metadata"
+    clear_metadata: "Clear metadata"
+    cleanup_region: "Clean up region state"
+    mode_command: "Mode operation"
+  condition:
+    permission: "Permission check"
+    region: "Region check"
+    mode: "Mode check"
+    chance: "Chance check"
+    has_union: "Union membership check"
+    union: "Specific union"
+    metadata: "Metadata check"
+    session_metadata: "Session metadata check"
+  trigger:
+    on_enter: "Enter region"
+    on_leave: "Leave region"
+    on_death: "Death"
+    on_kill: "Kill"
+    on_respawn: "Respawn"
+    on_interact: "Interact"
+    on_command: "Run command"
+    on_timer: "Timer"
+    on_mode_start: "Mode start"
+    on_mode_end: "Mode end"
+    on_role_assigned: "Role assigned"
+    on_found: "Found"
+    on_checkpoint: "Checkpoint reached"
+    on_finish: "Race finished"
+  start-mode:
+    vote: "Player ready"
+    judge: "Judge start"
+  severity:
+    error: "Error"
+    warning: "Warning"
+  state:
+    idle: "Idle"
+    waiting: "Waiting for ready <ready>/<required>"
+    preparing: "Preparing"
+    running: "Running, <players> player(s)"
+    restoring: "Restoring the previous match"
+  counter:
+    finished: "finished"
+    seekers: "seekers"
+    hiders: "hiders"
+    found: "found"
+    released: "released"
+    unions: "nations"
+    alive: "alive"
+    round: "round"
+    spectators: "spectators"
+  participant:
+    waiting: "not ready"
+    ready: "ready"
+    alive: "alive"
+    eliminated: "eliminated"
+    left: "left"
+    restoring: "restoring"
+    restored: "restored"
+  outcome:
+    natural: "Decided"
+    draw: "Draw"
+    timeout: "Time limit"
+    abandoned: "Forfeit"
+    aborted: "Aborted"
+  reward:
+    none: "none"
+    pending: "pending"
+    settled: "paid out"
+    refunded: "refunded"
+    review_required: "awaiting admin review"
+  field:
+    min-players: "Minimum players"
+    max-players: "Maximum players"
+    min-unions: "Minimum nations"
+    require-ready: "Require ready"
+    replace-gear: "Replace gear"
+    require-start: "Require start signal"
+    teleport-start: "Teleport on start"
+    start-mode: "Start mode"
+    timeout-seconds: "Time limit (seconds)"
+    kit: "Kit"
+    armor: "Armor preset"
+    offhand: "Off-hand preset"
+    vehicle: "Vehicle"
+    radius: "Radius"
+    spawn-points: "Spawn points"
+    spawn-points-b: "Team B spawn points"
+    best-of: "Series length"
+    team-size: "Players per side"
+    reward-source: "Reward source"
+    reward-contract: "Reward contract"
+  seeker-kit: "Seeker kit"
+  hider-kit: "Hider kit"
+  respawn: "Respawn point"
+  start: "Start point"
+  finish: "Finish point"
+  checkpoint-vehicles: "Checkpoint vehicles"
+  hide-seconds: "Hiding time (seconds)"
+  round-seconds: "Round length (seconds)"
+  seekers: "Seeker count"
+  dependency:
+    enabled: "enabled"
+    missing: "plugin missing or disabled"
+  reason:
+    plugin-disable: "plugin disable"
+    reload: "reload"
+    manual-command: "manual command"
+    start-failed: "start failed"
+    players-left: "player left"
+    death: "death"
+    leave-command: "left voluntarily"
+    server-stop: "server shutdown"
+    region-missing: "venue no longer exists"
+    prepare-failed: "gear or teleport failed"
+    roster-changed: "roster changed"
+    start-aborted: "start sequence failed"
+    decided: "decided"
+    restored: "restored"
+    empty: "nobody signed up"
+    funding-mapping: "reward identity mapping failed"
+errors:
+  action-text-conflict: "Action <type> sets both <field> and its *-key form; they are mutually exclusive (trigger <trigger>)."
+  action-text-required: "Action <type> requires either text or text-key (trigger <trigger>)."
+  effect-unknown-type: "Unknown temporary effect type: <type>"
+  effect-not-implemented: "Temporary effect <type> is registered but not implemented yet."
+  effect-parameter-required: "Temporary effect <type> requires parameter <parameter>."
+  effect-attribute-unavailable: "This server does not expose the attribute <type> needs."
+  effect-potion-unknown: "Potion effect <effect> does not exist."
+  effect-lease-player-mismatch: "The effect lease belongs to a different player; the restore was refused."
+  effect-restore-failed: "Restoring temporary effect <type> failed; the lease is kept for a retry."
+  effect-escrow-persist-failed: "The effect escrow could not be saved; the effect was rolled back."
+  effect-escrow-clear-failed: "The effect was restored but its escrow record could not be removed; it retries on the next start."
+  effect-escrow-rollback-failed: "The effect escrow could not be saved and the rollback failed; check disk permissions."
+  region-not-frozen: "Region <id> is not frozen."
+  region-validation-failed: "The region has <count> validation problem(s); nothing was written."
+  source-owner-unresolved: "Source <source> has no resolvable owner, so it cannot be reviewed."
+  trial-validation-failed: "The trial found <count> validation problem(s) and did not start."
+  trial-effect-failed: "The trial failed to apply a temporary effect and was rolled back."
+  region-id-blank: "Region id cannot be blank."
+  region-id-invalid: "Region id must contain 2-48 lowercase letters, numbers, underscores, or hyphens (got: <id>)."
+  region-name-blank: "Region name cannot be blank."
+  source-unknown: "Unknown region source type: <type>"
+  source-unavailable: "Source <type> is not currently available; install or enable its required integration."
+  source-unresolved: "Source <source> could not be resolved; rebind it to an existing owned area."
+  mode-unknown: "Unknown mode: <type>"
+  flag-unknown: "Unknown or unavailable rule: <key>"
+  effect-unknown: "Unknown temporary effect: <type>"
+  trigger-no-runtime: "Trigger <trigger> has no runtime and would never fire."
+  condition-unknown: "Unknown condition <type> in trigger <trigger>."
+  action-unknown: "Unknown action <type> in trigger <trigger>."
+  funding-unavailable: "Reward service is temporarily unavailable (<code>); try again later."
+  max-players-below-min: "<field> must be 0 (unlimited) or at least the minimum players (<min>)."
+  min-players-below: "Mode <type> requires minimum players of at least 2."
+  combat-timeout-invalid: "<field> must be a positive number of seconds."
+  best-of-invalid: "Duel best-of must be 1 (single round) or 3 (first to two)."
+  team-size-invalid: "Nation battle team-size must be between 2 and 10."
+  spawn-point-invalid: "Spawn point <entry> must use world,x,y,z[,yaw,pitch]."
+  spawn-points-count: "Not enough spawn points: <required> distinct points are needed, <current> configured."
+  spawn-points-spacing: "Some spawn points are closer than the recommended <minimum> blocks; consider adding more."
+  free-for-all-capacity: "Last player standing supports at most <limit> players in this release (currently <max>)."
+  free-for-all-reward-unsupported: "Last player standing has no reward integration; remove reward-source / reward-contract."
+  draft-revision-stale: "Another admin moved this draft to revision <actual> (you edited <expected>). The write was refused; reopen the page to see the current state."
+  publish-preview-stale: "The draft changed to revision <actual> after your preview (you confirmed <expected>). Publish was refused; preview again."
+  min-unions-above-players: "Minimum nations (<min-unions>) cannot exceed minimum players (<min-players>)."
+  race-timeout-invalid: "<field> must be a positive number of seconds."
+  checkpoint-vehicles-mismatch: "<field> needs one entry per checkpoint."
+  round-seconds-not-after-hide: "Round length must be greater than the hiding time."
+  seekers-above-min-players: "Seeker count must be lower than the minimum players."
+  item-list-too-many: "<field> accepts at most <max> item entries."
+  item-entry-invalid: "<field> item <entry> must use MATERIAL[:amount] with amount 1-64."
+  location-required: "Missing a <field> location."
+  location-invalid: "<field> must use world,x,y,z[,yaw,pitch]."
+  world-unloaded: "<field> references unloaded world <world>."
+  sound-invalid: "Invalid sound key <sound> in trigger <trigger>."
+  sound-unknown: "Unknown sound <sound> in trigger <trigger>."
+  potion-key-invalid: "Invalid potion effect key <effect>."
+  potion-unknown: "Unknown potion effect <effect>."
+  capability-unknown: "Unknown <kind> capability <id>."
+  capability-not-stable: "Capability <kind> <id> is <status> and cannot be published."
+  parameter-required: "<capability> requires parameter <parameter>."
+  parameter-unknown: "<capability> does not support parameter <parameter>."
+  parameter-blank: "<capability> parameter <parameter> cannot be blank."
+  parameter-integer: "<capability> parameter <parameter> must be an integer."
+  parameter-number: "<capability> parameter <parameter> must be a finite number."
+  parameter-boolean: "<capability> parameter <parameter> must be true or false."
+  parameter-enum: "<capability> parameter <parameter> must be one of: <values>"
+  parameter-min: "<capability> parameter <parameter> must be >= <min>."
+  parameter-max: "<capability> parameter <parameter> must be <= <max>."
+  overlap-stateful-mode: "Overlapping venues declare multiple stateful modes (<modes>); keep only one."
+  overlap-flag-priority: "Overlapping rule <key> resolves to <value> from <source> by priority."
+  overlap-effect-strategy: "Overlapping effect <family> uses different strategies; <strategy> from <source> wins."
+  overlap-effect-exclusive: "Exclusive effect <family> is provided by overlapping regions (<regions>)."
+  union-war-fallback-provider: "union_war requires an available UnionProvider; the fallback provider cannot identify unions."
+  console-command-warning: "This revision contains console_command actions. They run with server-console authority and will be audited."
+  console-command-superadmin-only: "console_command is reserved for Regions super-administrators and cannot be published by a ruler."
+  dependency-unavailable: "Dependency <id> is unavailable: <detail>"
+  cross-source-geometry-unproven: "Cross-source geometry cannot be statically proven against <sources>; runtime priority, effect combination and primary triggers stay deterministic."
+  region-already-exists: "Region <id> already exists."
+  region-limit-reached: "Region limit reached (currently <current>/<max>)."
+  region-no-draft: "Region <id> has no draft."
+  publish-blocked: "Publishing is blocked by <count> error(s); resolve them on the publish page first."
+  region-not-found: "Region not found: <id>"
+  region-not-published: "Region <id> is not published."
+  revision-not-found: "Region <id> has no revision <revision>."
+  persist-failed: "Failed to persist regions.yml; the previous on-disk state was restored."
+templates:
+  mini_kingdom:
+    name: "Mini Kingdom"
+    description: "Players shrink after entering; flight, invisibility and PvP are disabled."
+    enter:
+      title: "<green>Mini Kingdom"
+      subtitle: "<gray>Restored automatically after leaving"
+  event_plaza:
+    name: "Event Plaza"
+    description: "Lightweight event area; PvP and flight are disabled by default."
+  run_race:
+    name: "Running track"
+    description: "Running/parkour race. Creation asks for the start and finish; checkpoints are optional and can be added in the GUI later."
+    finish:
+      text: "<gold>{player} finished in place #{rank} in {race_time_ms}ms."
+  boat_race:
+    name: "Boat track"
+    description: "Boat race. Riders must sit in a boat for checkpoints and the finish to count. Creation asks for the start and finish."
+    finish:
+      text: "<gold>{player} reached the finish by boat in place #{rank}."
+  horse_race:
+    name: "Horse track"
+    description: "Horse race. Riders must be on a horse for checkpoints and the finish to count. Creation asks for the start and finish."
+    finish:
+      text: "<gold>{player} reached the finish on horseback in place #{rank}."
+  dual_pvp:
+    name: "Duel arena"
+    description: "Two players enter and everyone confirms to start; original gear is escrowed and a kit is handed out when the fight begins."
+    start:
+      title: "<red>Duel started"
+      subtitle: "<gray>Gear is restored automatically after defeating your opponent"
+    end:
+      text: "<yellow>Duel ended; gear has been restored."
+  union_war:
+    name: "Nation battlefield"
+    description: "Two nations field equal teams and fight to the last member. Creation asks for a return point plus one spawn per side."
+    start:
+      text: "<red>Nation battle started! Fight for your nation."
+    end:
+      text: "<yellow>Nation battle ended; gear has been restored."
+  free_for_all:
+    name: "Last-player-standing arena"
+    description: "One life each; the last player standing wins. Creation asks for a return point and four spawns; add more on the mode page to raise the cap."
+    start:
+      text: "<red>The brawl begins! One life each — the last player standing wins."
+    end:
+      text: "<yellow>The brawl is over; gear has been restored."
+  hide_and_seek:
+    name: "Hide and seek arena"
+    description: "Round-based mini game. Players ready up; seekers and hiders are assigned automatically. A seeker hitting a hider finds them without real damage."
+    start:
+      title: "<green>Hide and seek started"
+      subtitle: "<gray>Seekers are released soon"
+    assigned:
+      text: "<yellow>Your role has been assigned; check the chat."
+    found:
+      text: "<gold>{player} was found."
+    end:
+      text: "<yellow>Mini game ended; temporary effects have been restored."
+language-disabled: "Per-player language selection is disabled on this server (locale-mode: server)."
+language-current: "Your language: <locale> (use /regions language <zh_CN|en_US|auto> to change)"
+language-set: "Language switched to <locale>."
+language-cleared: "Language reset to auto; your client language will be used."

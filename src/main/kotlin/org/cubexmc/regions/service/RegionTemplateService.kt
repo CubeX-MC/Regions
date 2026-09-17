@@ -1,8 +1,10 @@
 package org.cubexmc.regions.service
 
+import org.bukkit.command.CommandSender
 import org.bukkit.configuration.ConfigurationSection
 import org.bukkit.configuration.file.YamlConfiguration
 import org.cubexmc.core.Reloadable
+import org.cubexmc.regions.RegionsPlugin
 import org.cubexmc.regions.model.ActionBlockConfig
 import org.cubexmc.regions.model.ActionConfig
 import org.cubexmc.regions.model.ConditionConfig
@@ -63,6 +65,9 @@ data class RegionTemplate(
     val id: String,
     val name: String,
     val description: String,
+    /** 语言键形式的显示名/描述（`templates.<id>.*`）；与字面量互斥，键优先用于显示。 */
+    val nameKey: String? = null,
+    val descriptionKey: String? = null,
     val parameters: Map<String, TemplateParameter> = emptyMap(),
     val mode: ModeConfig? = null,
     val flags: Map<String, FlagConfig> = emptyMap(),
@@ -77,21 +82,60 @@ data class TemplateApplyResult(
     val success: Boolean get() = region != null && errors.isEmpty()
 }
 
-class RegionTemplateService(private val file: File) : Reloadable {
+/**
+ * 模板目录。
+ *
+ * [builtIns] 返回 jar 内自带的 `templates.yml`（缺席表示不做合并）。服主文件里**没有**的内置模板
+ * 会在内存里补进来：升级安装拿不到新增玩法模板的话，GUI 就没有创建那个玩法的入口，而这在
+ * `saveIfMissing` 语义下永远不会自愈。合并**只加不改**——已存在的 id（无论是内置还是自定义）
+ * 原样保留，文件本身也**不被重写**（重写会丢注释、丢服主自己的排版）。
+ */
+class RegionTemplateService(
+    private val file: File,
+    private val builtIns: () -> java.io.InputStream? = { null },
+) : Reloadable {
     private val templates = LinkedHashMap<String, RegionTemplate>()
+
+    /** 上一次 [load] 从 jar 补进来的模板 id，供调用方记录日志。 */
+    private var mergedBuiltIns: List<String> = emptyList()
 
     override fun reload() {
         load()
     }
 
-    fun load() {
+    fun load(): List<String> {
         templates.clear()
         val yaml = YamlConfiguration.loadConfiguration(file)
-        val root = yaml.getConfigurationSection("templates") ?: return
+        mergedBuiltIns = mergeBuiltIns(yaml)
+        val root = yaml.getConfigurationSection("templates") ?: return mergedBuiltIns
         for (id in root.getKeys(false)) {
             val section = root.getConfigurationSection(id) ?: continue
             parseTemplate(id.lowercase(Locale.ROOT), section)?.let { templates[it.id] = it }
         }
+        return mergedBuiltIns
+    }
+
+    /**
+     * 只在内存里补齐缺失的内置模板：[yaml] 中已存在的 `templates.<id>` 一律不动，
+     * jar 里有而文件里没有的才追加进这份内存配置。
+     */
+    private fun mergeBuiltIns(yaml: YamlConfiguration): List<String> {
+        val stream = runCatching { builtIns() }.getOrNull() ?: return emptyList()
+        val shipped = stream.use { YamlConfiguration.loadConfiguration(it.reader(Charsets.UTF_8)) }
+        val shippedRoot = shipped.getConfigurationSection("templates") ?: return emptyList()
+        val ownerRoot = yaml.getConfigurationSection("templates") ?: yaml.createSection("templates")
+        val added = ArrayList<String>()
+        for (id in shippedRoot.getKeys(false)) {
+            if (ownerRoot.contains(id)) continue
+            val section = shippedRoot.getConfigurationSection(id) ?: continue
+            val target = ownerRoot.createSection(id)
+            for (key in section.getKeys(true)) {
+                if (section.isConfigurationSection(key)) continue
+                target.set(key, section.get(key))
+            }
+            added += id
+        }
+        return added
     }
 
     fun all(): List<RegionTemplate> = templates.values.toList()
@@ -132,7 +176,14 @@ class RegionTemplateService(private val file: File) : Reloadable {
     }
 
     private fun parseTemplate(id: String, section: ConfigurationSection): RegionTemplate? {
-        val name = section.getString("name") ?: return null
+        // 键形式与字面量形式互斥（PLAN.md §4.3）；同时出现视为模板配置错误，整个模板不加载。
+        val nameKey = section.getString("name-key")
+        val name = section.getString("name")
+        if (nameKey != null && name != null) return null
+        if (nameKey == null && name == null) return null
+        val descriptionKey = section.getString("description-key")
+        val description = section.getString("description", "") ?: ""
+        if (descriptionKey != null && description.isNotBlank()) return null
         val modeSection = section.getConfigurationSection("mode")
         val mode = modeSection?.getString("type")?.let { type ->
             ModeConfig(type, sectionValues(modeSection, setOf("type")))
@@ -162,8 +213,10 @@ class RegionTemplateService(private val file: File) : Reloadable {
         }
         return RegionTemplate(
             id = id,
-            name = name,
-            description = section.getString("description", "") ?: "",
+            name = name ?: "",
+            description = description,
+            nameKey = nameKey,
+            descriptionKey = descriptionKey,
             parameters = parseParameters(section.getConfigurationSection("parameters")),
             mode = mode,
             flags = flags,
@@ -244,3 +297,22 @@ class RegionTemplateService(private val file: File) : Reloadable {
         private val PARAMETER_PATTERN = Regex("\\$\\{([a-zA-Z0-9_-]+)}")
     }
 }
+
+/** 模板显示名：`name-key` 经语言文件解析，键缺失或未配置时回退字面量。 */
+fun RegionsPlugin.templateDisplayName(template: RegionTemplate): String =
+    templateDisplayName(template, null)
+
+/**
+ * [templateDisplayName] rendered in [viewer]'s locale（PLAN.md §4.2）：模板名是语言键，
+ * 菜单必须按正在看这块按钮的玩家解析，否则 `locale-mode: player` 下中英玩家会看到对方的语言。
+ */
+fun RegionsPlugin.templateDisplayName(template: RegionTemplate, viewer: CommandSender?): String =
+    template.nameKey?.let { key -> lang().labelFor(viewer, key, template.name) } ?: template.name
+
+/** 模板显示描述：规则同 [templateDisplayName]。 */
+fun RegionsPlugin.templateDisplayDescription(template: RegionTemplate): String =
+    templateDisplayDescription(template, null)
+
+/** [templateDisplayDescription] rendered in [viewer]'s locale. */
+fun RegionsPlugin.templateDisplayDescription(template: RegionTemplate, viewer: CommandSender?): String =
+    template.descriptionKey?.let { key -> lang().labelFor(viewer, key, template.description) } ?: template.description

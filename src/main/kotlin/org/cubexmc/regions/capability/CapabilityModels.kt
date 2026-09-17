@@ -57,7 +57,14 @@ data class CapabilityDescriptor(
     val strictParameters: Boolean = true,
 )
 
+/**
+ * One capability-schema finding. [code] renders from `errors.<code>` with [args]; [message] is the
+ * English diagnostic for logs and tests only — never shown to players.
+ */
 data class CapabilityValidationIssue(
-    val message: String,
+    val code: String,
+    val args: Map<String, String> = emptyMap(),
+    val fieldPath: String? = null,
+    val message: String = "",
     val error: Boolean = true,
 )

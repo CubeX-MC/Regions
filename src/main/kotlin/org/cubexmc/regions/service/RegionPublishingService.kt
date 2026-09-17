@@ -69,7 +69,7 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
 
     fun createDraft(sender: CommandSender, candidate: RegionDefinition): ServiceResult {
         if (plugin.regions().find(candidate.id) != null || draft(candidate.id) != null) {
-            return ServiceResult.fail("Region already exists: ${candidate.id}")
+            return ServiceResult.failCoded("region-already-exists", mapOf("id" to candidate.id), "Region already exists: ${candidate.id}")
         }
         val authority = plugin.authority().canCreate(sender, candidate.source)
         if (!authority.allowed) return denied(authority)
@@ -83,7 +83,7 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
         ) {
             val managed = plugin.regions().all().count { plugin.authority().canView(player, it).allowed }
             if (managed >= maxRegions) {
-                return ServiceResult.fail("Region limit reached ($managed/$maxRegions).")
+                return ServiceResult.failCoded("region-limit-reached", mapOf("current" to managed.toString(), "max" to maxRegions.toString()), "Region limit reached ($managed/$maxRegions).")
             }
         }
         val draft = candidate.copy(
@@ -98,9 +98,17 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
         return ServiceResult.ok()
     }
 
-    fun saveDraft(sender: CommandSender, candidate: RegionDefinition): ServiceResult {
+    /**
+     * 保存草稿。
+     *
+     * [expectedRevision] 是乐观并发守卫：调用方（GUI 页面、聊天回调）声明"我是基于哪个 revision 改的"，
+     * 与磁盘上当前的草稿／已发布 revision 不一致就拒绝写入并让调用方刷新摘要。为 null 表示
+     * 调用方在同一瞬间读过最新状态（命令路径），不做检查。
+     */
+    fun saveDraft(sender: CommandSender, candidate: RegionDefinition, expectedRevision: Long? = null): ServiceResult {
         val current = plugin.regions().find(candidate.id)
             ?: return createDraft(sender, candidate)
+        staleWrite(candidate.id, expectedRevision)?.let { return it }
         val authority = plugin.authority().canManage(sender, current)
         if (!authority.allowed) return denied(authority)
         val sourceAuthority = plugin.authority().canCreate(sender, candidate.source)
@@ -125,12 +133,39 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
         return ServiceResult.ok()
     }
 
-    fun publish(sender: CommandSender, regionId: String): ServiceResult {
-        val draft = draft(regionId) ?: return ServiceResult.fail("Region has no draft: $regionId")
+    /**
+     * 拒绝基于过期快照的写入（PLAN.md §5.2：草稿被另一个管理员更新时，旧按钮与聊天回调必须
+     * 拒绝写入并刷新摘要，而不是把别人的修改悄悄覆盖掉）。
+     */
+    private fun staleWrite(regionId: String, expectedRevision: Long?): ServiceResult? {
+        if (expectedRevision == null) return null
+        val actual = (draft(regionId) ?: plugin.regions().find(regionId))?.revision ?: return null
+        if (actual == expectedRevision) return null
+        return ServiceResult.failCoded(
+            "draft-revision-stale",
+            mapOf("expected" to expectedRevision.toString(), "actual" to actual.toString()),
+            "Draft $regionId moved from revision $expectedRevision to $actual; the write was refused.",
+        )
+    }
+
+    fun publish(sender: CommandSender, regionId: String, expectedRevision: Long? = null): ServiceResult {
+        val draft = draft(regionId) ?: return ServiceResult.failCoded("region-no-draft", mapOf("id" to regionId), "Region has no draft: $regionId")
+        if (expectedRevision != null && draft.revision != expectedRevision) {
+            // 确认页显示的是这个 revision：草稿在预览之后被别人改过就拒绝发布，让操作者重新预览。
+            return ServiceResult.failCoded(
+                "publish-preview-stale",
+                mapOf("expected" to expectedRevision.toString(), "actual" to draft.revision.toString()),
+                "Draft $regionId changed after the preview ($expectedRevision -> ${draft.revision}); publish was refused.",
+            )
+        }
         val authority = plugin.authority().canManage(sender, draft)
         if (!authority.allowed) return denied(authority)
         val issues = previewIssues(sender, regionId).filter { it.severity == ValidationSeverity.ERROR }
-        if (issues.isNotEmpty()) return ServiceResult.fail(issues.joinToString("; ") { it.message })
+        if (issues.isNotEmpty()) return ServiceResult.failCoded(
+            "publish-blocked",
+            mapOf("count" to issues.size.toString()),
+            issues.joinToString("; ") { it.message },
+        )
         val current = plugin.regions().find(regionId)
         val nextRevision = max(current?.revision ?: 0, draft.revision).coerceAtLeast(1)
         val published = draft.copy(
@@ -157,11 +192,11 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
     }
 
     fun withdraw(sender: CommandSender, regionId: String): ServiceResult {
-        val current = plugin.regions().find(regionId) ?: return ServiceResult.fail("Region not found: $regionId")
+        val current = plugin.regions().find(regionId) ?: return ServiceResult.failCoded("region-not-found", mapOf("id" to regionId), "Region not found: $regionId")
         val authority = plugin.authority().canManage(sender, current)
         if (!authority.allowed) return denied(authority)
         if (current.lifecycle != RegionLifecycle.PUBLISHED) {
-            return ServiceResult.fail("Region is not published: $regionId")
+            return ServiceResult.failCoded("region-not-published", mapOf("id" to regionId), "Region is not published: $regionId")
         }
         recordRevision(current)
         val next = current.copy(
@@ -178,7 +213,7 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
     }
 
     fun archive(sender: CommandSender, regionId: String): ServiceResult {
-        val current = plugin.regions().find(regionId) ?: return ServiceResult.fail("Region not found: $regionId")
+        val current = plugin.regions().find(regionId) ?: return ServiceResult.failCoded("region-not-found", mapOf("id" to regionId), "Region not found: $regionId")
         val authority = plugin.authority().canManage(sender, current)
         if (!authority.allowed) return denied(authority)
         if (current.lifecycle == RegionLifecycle.PUBLISHED) recordRevision(current)
@@ -197,7 +232,7 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
     }
 
     fun rollback(sender: CommandSender, regionId: String, targetRevision: Long): ServiceResult {
-        val current = plugin.regions().find(regionId) ?: return ServiceResult.fail("Region not found: $regionId")
+        val current = plugin.regions().find(regionId) ?: return ServiceResult.failCoded("region-not-found", mapOf("id" to regionId), "Region not found: $regionId")
         val authority = if (current.lifecycle == RegionLifecycle.ARCHIVED || current.lifecycle == RegionLifecycle.FROZEN) {
             plugin.authority().canUseGlobalAdministration(sender)
         } else {
@@ -205,12 +240,20 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
         }
         if (!authority.allowed) return denied(authority)
         val target = plugin.storage().findRevision(regionId, targetRevision)
-            ?: return ServiceResult.fail("Revision $targetRevision not found for $regionId")
+            ?: return ServiceResult.failCoded(
+            "revision-not-found",
+            mapOf("revision" to targetRevision.toString(), "id" to regionId),
+            "Revision $targetRevision not found for $regionId",
+        )
         val targetSourceAuthority = plugin.authority().canCreate(sender, target.source)
         if (!targetSourceAuthority.allowed) return denied(targetSourceAuthority)
         val issues = publishingIssues(sender, target)
             .filter { it.severity == ValidationSeverity.ERROR }
-        if (issues.isNotEmpty()) return ServiceResult.fail(issues.joinToString("; ") { it.message })
+        if (issues.isNotEmpty()) return ServiceResult.failCoded(
+            "publish-blocked",
+            mapOf("count" to issues.size.toString()),
+            issues.joinToString("; ") { it.message },
+        )
         val nextRevision = max(current.revision, history(regionId).maxOfOrNull { it.revision } ?: 0) + 1
         val metadata = LinkedHashMap(target.metadata)
         val targetOwner = plugin.sources().find(target.source.type)?.ownerId(target.source)
@@ -258,7 +301,10 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
     private fun persistOrReload(): ServiceResult? {
         if (plugin.storage().flushIfDirty()) return null
         plugin.storage().load()
-        return ServiceResult.fail("Failed to persist regions.yml; the previous on-disk state was restored.")
+        return ServiceResult.failCoded(
+            "persist-failed",
+            diagnostic = "Failed to persist regions.yml; the previous on-disk state was restored.",
+        )
     }
 
     private fun denied(decision: AuthorityDecision): ServiceResult =
@@ -276,7 +322,8 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
             issues.add(ValidationIssue(
                 region.id,
                 ValidationSeverity.ERROR,
-                "union_war requires an available UnionProvider; the fallback provider cannot identify unions.",
+                "union-war-fallback-provider",
+                message = "union_war requires an available UnionProvider; the fallback provider cannot identify unions.",
             ))
         }
         if (!region.allActions().any { it.type.equals("console_command", ignoreCase = true) }) {
@@ -286,13 +333,15 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
             ValidationIssue(
                 region.id,
                 ValidationSeverity.WARNING,
-                "This revision contains console_command actions. They run with server-console authority and will be audited.",
+                "console-command-warning",
+                message = "This revision contains console_command actions. They run with server-console authority and will be audited.",
             )
         } else {
             ValidationIssue(
                 region.id,
                 ValidationSeverity.ERROR,
-                "console_command is reserved for Regions super-administrators and cannot be published by a ruler.",
+                "console-command-superadmin-only",
+                message = "console_command is reserved for Regions super-administrators and cannot be published by a ruler.",
             )
         })
         return issues
@@ -305,7 +354,9 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
                 ValidationIssue(
                     region.id,
                     ValidationSeverity.ERROR,
-                    "Required dependency '${dependency.id}' is unavailable: ${dependency.detail}",
+                    "dependency-unavailable",
+                    args = mapOf("id" to dependency.id, "detail" to dependency.detail),
+                    message = "Required dependency '${dependency.id}' is unavailable: ${dependency.detail}",
                 )
             }
 
@@ -322,7 +373,9 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
         return listOf(ValidationIssue(
             candidate.id,
             ValidationSeverity.WARNING,
-            "Cross-source geometry cannot be statically proven against: ${unknownSources.joinToString()}. " +
+            "cross-source-geometry-unproven",
+            args = mapOf("sources" to unknownSources.joinToString()),
+            message = "Cross-source geometry cannot be statically proven against: ${unknownSources.joinToString()}. " +
                 "Runtime priority, Effect combination, and primary Trigger rules remain deterministic.",
         ))
     }
@@ -349,7 +402,7 @@ class RegionPublishingService(private val plugin: RegionsPlugin) {
             PublishingDependency(
                 dependency,
                 available,
-                if (available) "enabled" else "plugin is missing or disabled",
+                if (available) "enabled" else "missing",
             )
         }
     }

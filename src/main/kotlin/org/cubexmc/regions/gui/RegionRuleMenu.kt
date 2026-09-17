@@ -19,26 +19,28 @@ internal class RegionRuleMenu(private val gui: RegionsGui) {
     private val text get() = gui.text
     private val items get() = gui.items
 
-    fun openFlags(player: Player, regionId: String) {
+    fun openFlags(player: Player, regionId: String, returnToPublish: Boolean = false) {
         val region = gui.editable(regionId) ?: return gui.openMain(player)
         val inventory = Bukkit.createInventory(
-            RegionsHolder(View.FLAGS, region.id),
+            RegionsHolder(View.FLAGS, region.id, returnToPublish = returnToPublish),
             54,
-            text.component("gui.flag.title", mapOf("id" to region.id)),
+            text.component(player, "gui.flag.title", mapOf("id" to region.id)),
         )
-        inventory.setItem(4, items.region(region))
+        inventory.setItem(4, items.region(player, region))
         for ((slot, flag) in GuiSlots.FLAGS) {
             // A flag with no runtime never appears, so the page cannot promise an unenforced rule.
             if (!plugin.flags().isRegistered(flag)) continue
-            inventory.setItem(slot, items.flag(flag, region.flags[flag]?.value ?: "pass"))
+            inventory.setItem(slot, items.flag(player, flag, region.flags[flag]?.value ?: "pass"))
         }
-        inventory.setItem(48, text.item(Material.PAPER, "gui.flag.advanced"))
-        inventory.setItem(49, items.back())
+        inventory.setItem(48, text.item(player, Material.PAPER, "gui.flag.advanced"))
+        inventory.setItem(49, items.back(player))
         player.openInventory(inventory)
     }
 
-    fun clickFlags(player: Player, regionId: String, slot: Int) {
-        if (slot == 49) return gui.openDetail(player, regionId)
+    fun clickFlags(player: Player, regionId: String, slot: Int, returnToPublish: Boolean = false) {
+        if (slot == 49) {
+            return if (returnToPublish) gui.openPublishPreview(player, regionId) else gui.openDetail(player, regionId)
+        }
         val region = gui.editable(regionId) ?: return gui.openMain(player)
         if (slot == 48) return promptFlag(player, region)
         val flag = GuiSlots.FLAGS[slot] ?: return
@@ -69,30 +71,32 @@ internal class RegionRuleMenu(private val gui: RegionsGui) {
         }
     }
 
-    fun openEffects(player: Player, regionId: String) {
+    fun openEffects(player: Player, regionId: String, returnToPublish: Boolean = false) {
         val region = gui.editable(regionId) ?: return gui.openMain(player)
         val inventory = Bukkit.createInventory(
-            RegionsHolder(View.EFFECTS, region.id),
+            RegionsHolder(View.EFFECTS, region.id, returnToPublish = returnToPublish),
             54,
-            text.component("gui.effect.title", mapOf("id" to region.id)),
+            text.component(player, "gui.effect.title", mapOf("id" to region.id)),
         )
-        inventory.setItem(4, items.region(region))
+        inventory.setItem(4, items.region(player, region))
         for ((index, effect) in region.effects.take(27).withIndex()) {
-            inventory.setItem(index + 9, items.effect(index, effect))
+            inventory.setItem(index + 9, items.effect(player, index, effect))
         }
-        inventory.setItem(37, text.item(Material.AMETHYST_SHARD, "gui.effect.preset.small"))
-        inventory.setItem(38, text.item(Material.ENDER_PEARL, "gui.effect.preset.large"))
-        inventory.setItem(39, text.item(Material.FEATHER, "gui.effect.preset.flight"))
-        inventory.setItem(40, text.item(Material.SUGAR, "gui.effect.preset.speed"))
-        inventory.setItem(41, text.item(Material.GLASS_BOTTLE, "gui.effect.preset.invisibility"))
-        inventory.setItem(43, text.item(Material.LAVA_BUCKET, "gui.effect.clear"))
-        inventory.setItem(48, text.item(Material.PAPER, "gui.effect.advanced"))
-        inventory.setItem(49, items.back())
+        inventory.setItem(37, text.item(player, Material.AMETHYST_SHARD, "gui.effect.preset.small"))
+        inventory.setItem(38, text.item(player, Material.ENDER_PEARL, "gui.effect.preset.large"))
+        inventory.setItem(39, text.item(player, Material.FEATHER, "gui.effect.preset.flight"))
+        inventory.setItem(40, text.item(player, Material.SUGAR, "gui.effect.preset.speed"))
+        inventory.setItem(41, text.item(player, Material.GLASS_BOTTLE, "gui.effect.preset.invisibility"))
+        inventory.setItem(43, text.item(player, Material.LAVA_BUCKET, "gui.effect.clear"))
+        inventory.setItem(48, text.item(player, Material.PAPER, "gui.effect.advanced"))
+        inventory.setItem(49, items.back(player))
         player.openInventory(inventory)
     }
 
-    fun clickEffects(player: Player, regionId: String, slot: Int) {
-        if (slot == 49) return gui.openDetail(player, regionId)
+    fun clickEffects(player: Player, regionId: String, slot: Int, returnToPublish: Boolean = false) {
+        if (slot == 49) {
+            return if (returnToPublish) gui.openPublishPreview(player, regionId) else gui.openDetail(player, regionId)
+        }
         val region = gui.editable(regionId) ?: return gui.openMain(player)
         if (slot == 48) return promptEffect(player, region)
         val effects = ArrayList(region.effects)
@@ -136,22 +140,23 @@ internal class RegionRuleMenu(private val gui: RegionsGui) {
         }
     }
 
-    fun openTriggers(player: Player, regionId: String) {
+    fun openTriggers(player: Player, regionId: String, returnToPublish: Boolean = false) {
         val region = gui.editable(regionId) ?: return gui.openMain(player)
         val inventory = Bukkit.createInventory(
-            RegionsHolder(View.TRIGGERS, region.id),
+            RegionsHolder(View.TRIGGERS, region.id, returnToPublish = returnToPublish),
             54,
-            text.component("gui.trigger.title", mapOf("id" to region.id)),
+            text.component(player, "gui.trigger.title", mapOf("id" to region.id)),
         )
-        inventory.setItem(4, items.region(region))
+        inventory.setItem(4, items.region(player, region))
         var slot = 9
         for ((trigger, blocks) in region.triggers) {
             if (slot > 35) break
             val summary = blocks.take(4).map { block ->
                 text.text(
+                    player,
                     "gui.trigger.block-line",
                     mapOf(
-                        "name" to (block.name ?: text.text("gui.trigger.unnamed")),
+                        "name" to (block.name ?: text.text(player, "gui.trigger.unnamed")),
                         "execution" to block.execution.name.lowercase(Locale.ROOT),
                         "actions" to block.thenActions.joinToString(", ") { it.type },
                     ),
@@ -162,29 +167,33 @@ internal class RegionRuleMenu(private val gui: RegionsGui) {
                 text.named(
                     GuiIcons.TRIGGER,
                     text.text(
+                        player,
                         "gui.trigger.entry",
                         mapOf(
-                            "trigger" to text.label("gui.trigger.key.${trigger.key}", trigger.key),
+                            // 高级页：译名为主，稳定 ID 以括号形式保留，便于对照 YAML（PLAN.md §4.1）。
+                            "trigger" to "${text.label(player, "labels.trigger.${trigger.key}", trigger.key)} <dark_gray>(${trigger.key})",
                             "count" to blocks.size.toString(),
                         ),
                     ),
-                    summary + listOf(text.text("gui.trigger.clear-hint")),
+                    summary + listOf(text.text(player, "gui.trigger.clear-hint")),
                 ),
             )
             slot += 1
         }
-        inventory.setItem(37, text.item(Material.OAK_DOOR, "gui.trigger.preset.enter"))
-        inventory.setItem(38, text.item(Material.FIREWORK_ROCKET, "gui.trigger.preset.start"))
-        inventory.setItem(39, text.item(Material.GOLD_INGOT, "gui.trigger.preset.finish"))
-        inventory.setItem(41, text.item(Material.PAPER, "gui.trigger.advanced"))
-        inventory.setItem(43, text.item(Material.LAVA_BUCKET, "gui.trigger.clear"))
-        inventory.setItem(49, items.back())
+        inventory.setItem(37, text.item(player, Material.OAK_DOOR, "gui.trigger.preset.enter"))
+        inventory.setItem(38, text.item(player, Material.FIREWORK_ROCKET, "gui.trigger.preset.start"))
+        inventory.setItem(39, text.item(player, Material.GOLD_INGOT, "gui.trigger.preset.finish"))
+        inventory.setItem(41, text.item(player, Material.PAPER, "gui.trigger.advanced"))
+        inventory.setItem(43, text.item(player, Material.LAVA_BUCKET, "gui.trigger.clear"))
+        inventory.setItem(49, items.back(player))
         player.openInventory(inventory)
     }
 
-    fun clickTriggers(player: Player, regionId: String, slot: Int) {
+    fun clickTriggers(player: Player, regionId: String, slot: Int, returnToPublish: Boolean = false) {
         val region = gui.editable(regionId) ?: return gui.openMain(player)
-        if (slot == 49) return gui.openDetail(player, regionId)
+        if (slot == 49) {
+            return if (returnToPublish) gui.openPublishPreview(player, regionId) else gui.openDetail(player, regionId)
+        }
         if (slot in 9..35) {
             val trigger = region.triggers.keys.toList().getOrNull(slot - 9) ?: return
             val triggers = LinkedHashMap(region.triggers)
@@ -198,7 +207,7 @@ internal class RegionRuleMenu(private val gui: RegionsGui) {
         val block = when (slot) {
             37 -> RegionTrigger.ON_ENTER to ActionBlockConfig(
                 "gui-enter-message",
-                thenActions = listOf(ActionConfig("message", mapOf("text" to text.text("gui.trigger.preset.enter.text")))),
+                thenActions = listOf(ActionConfig("message", mapOf("text" to text.text(player, "gui.trigger.preset.enter.text")))),
             )
             38 -> RegionTrigger.ON_MODE_START to ActionBlockConfig(
                 "gui-start-title",
@@ -206,15 +215,15 @@ internal class RegionRuleMenu(private val gui: RegionsGui) {
                     ActionConfig(
                         "title",
                         mapOf(
-                            "title" to text.text("gui.trigger.preset.start.title"),
-                            "subtitle" to text.text("gui.trigger.preset.start.subtitle"),
+                            "title" to text.text(player, "gui.trigger.preset.start.title"),
+                            "subtitle" to text.text(player, "gui.trigger.preset.start.subtitle"),
                         ),
                     ),
                 ),
             )
             39 -> RegionTrigger.ON_FINISH to ActionBlockConfig(
                 "gui-finish-broadcast",
-                thenActions = listOf(ActionConfig("broadcast", mapOf("text" to text.text("gui.trigger.preset.finish.text")))),
+                thenActions = listOf(ActionConfig("broadcast", mapOf("text" to text.text(player, "gui.trigger.preset.finish.text")))),
             )
             else -> return
         }

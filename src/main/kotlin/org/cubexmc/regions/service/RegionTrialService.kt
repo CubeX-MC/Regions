@@ -19,7 +19,7 @@ class RegionTrialService(private val plugin: RegionsPlugin) {
 
     fun start(player: Player, regionId: String): ServiceResult {
         val draft = plugin.publishing().draft(regionId)
-            ?: return ServiceResult.fail("Region has no draft: $regionId")
+            ?: return ServiceResult.failCoded("region-no-draft", mapOf("id" to regionId), "Region has no draft: $regionId")
         val authority = plugin.authority().canManage(player, draft)
         if (!authority.allowed) {
             return ServiceResult.fail(authority.denial?.messageKey ?: "no-permission")
@@ -27,7 +27,11 @@ class RegionTrialService(private val plugin: RegionsPlugin) {
         val errors = plugin.publishing().previewIssues(player, regionId)
             .filter { it.severity == ValidationSeverity.ERROR }
         if (errors.isNotEmpty()) {
-            return ServiceResult.fail(errors.joinToString("; ") { it.message })
+            return ServiceResult.failCoded(
+                "trial-validation-failed",
+                mapOf("count" to errors.size.toString()),
+                errors.joinToString("; ") { it.message },
+            )
         }
         stop(player, "trial-replaced")
         val syntheticId = "trial_${player.uniqueId.toString().replace("-", "").take(12)}"
@@ -37,8 +41,9 @@ class RegionTrialService(private val plugin: RegionsPlugin) {
             val applied = plugin.effects().apply(player, synthetic, effect.config)
             if (!applied.success) {
                 plugin.effects().cleanupRegion(player, syntheticId, "trial-start-failed")
-                return ServiceResult.fail(
-                    "Trial effect failed: ${applied.reason.ifBlank { "unknown error" }}; trial was rolled back",
+                return ServiceResult.failCoded(
+                    "trial-effect-failed",
+                    diagnostic = "Trial effect failed: ${applied.reason.ifBlank { "unknown error" }}; trial was rolled back",
                 )
             }
         }

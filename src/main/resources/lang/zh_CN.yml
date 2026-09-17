@@ -1,4 +1,4 @@
-lang-version: 7
+lang-version: 8
 
 prefix: "<#69DB7C>[Regions] "
 help: |
@@ -7,10 +7,13 @@ help: |
   <#69DB7C>/regions create \<id> \<名称> --land \<领地> [area] <#CFD8DC>- 在自己的 Lands 区域创建场地
   <#69DB7C>/regions bind \<id> cuboid|lands ... <#CFD8DC>- 绑定区域来源
   <#69DB7C>/regions mode set \<id> dual_pvp|union_war|run_race|boat_race|horse_race|hide_and_seek ... <#CFD8DC>- 设置玩法
-  <#69DB7C>/regions game \<id> ready/start/status/end <#CFD8DC>- 确认、裁判开始、查看或结束游戏
+  <#69DB7C>/regions game \<id> join|leave|ready|unready|spectate|status|result <#CFD8DC>- 报名、退出、准备、观战或查看比赛
+  <#69DB7C>/regions game \<id> teams \<甲方国家> \<乙方国家> <#CFD8DC>- 场地主指定工会战本场双方
+  <#69DB7C>/regions game \<id> start|end <#CFD8DC>- 裁判发令或强制结束比赛
+  <#69DB7C>/regions language \<zh_CN|en_US|auto> <#CFD8DC>- 选择自己的显示语言（仅 locale-mode: player 时生效）
   <#69DB7C>/regions flag set \<id> \<flag> \<值> <#CFD8DC>- 设置规则
   <#69DB7C>/regions effect add \<id> \<effect> [参数] <#CFD8DC>- 添加区域效果
-  <#69DB7C>/regions trial \<id> [start|stop] <#CFD8DC>- 仅对自己隔离试运行草稿 Effect 与 Flag
+  <#69DB7C>/regions trial \<id> [start|stop] <#CFD8DC>- 仅对自己隔离试运行草稿的临时效果与场地规则
   <#69DB7C>/regions preview \<id> <#CFD8DC>- 查看依赖、冲突和最终有效规则
   <#69DB7C>/regions validate [id] <#CFD8DC>- 校验配置
   <#69DB7C>/regions inspect \<玩家> <#CFD8DC>- 查看玩家区域状态
@@ -23,7 +26,7 @@ help-publishing: |
   <#69DB7C>/regions history \<id> <#CFD8DC>- 查看不可变版本历史
   <#69DB7C>/regions rollback \<id> \<revision> <#CFD8DC>- 将历史版本发布为新 revision
   <#69DB7C>/regions archive \<id> <#CFD8DC>- 归档场地
-help-player: "<#CFD8DC>进入被设置过的领地或场地即可体验 Regions；对战、比赛、小游戏场地会在需要确认时提示你使用 <#69DB7C>/regions game \\<场地> ready<#CFD8DC>。"
+help-player: "<#CFD8DC>直接输入 <#69DB7C>/regions<#CFD8DC> 打开活动大厅，或走进被设置过的领地体验。走进对战场地只会提示一次，报名要用 <#69DB7C>/regions game \\<场地> join<#CFD8DC>，站好后用 <#69DB7C>/regions game \\<场地> ready<#CFD8DC> 准备；中途退出用 <#69DB7C>leave<#CFD8DC>，想看别人打用 <#69DB7C>spectate<#CFD8DC>。服务器开启玩家语言时，可用 <#69DB7C>/regions language \\<zh_CN|en_US|auto><#CFD8DC> 换语言。"
 reloaded: "<#69DB7C>Regions 已重载。"
 reload-failed: "<#E63946>Regions 重载失败，运行中的状态保持不变。失败阶段: <stages>"
 no-permission: "<#E63946>你没有权限。"
@@ -89,33 +92,111 @@ command:
   preview-summary: "<gray>变化: <changes>，问题: <issues>，确定重叠: <overlaps>"
   preview-dependency-ok: "<green>依赖 <id>: <detail>"
   preview-dependency-missing: "<red>依赖 <id>: <detail>"
-  preview-resolution-summary: "<aqua>最终 Mode: <mode>；主 Trigger Region: <trigger>"
-  preview-flag-line: "<gray>Flag <flag>=<value> <dark_gray>← <source>"
-  preview-effect-line: "<gray>Effect <effect> [<combination>] <dark_gray>← <source>"
-  trial-started: "<green>隔离试运行已开始；只有你会受到草稿 Effect 与 Flag 影响。"
+  preview-resolution-summary: "<aqua>最终玩法: <mode>；主触发场地: <trigger>"
+  preview-flag-line: "<gray>规则 <flag>=<value> <dark_gray>← <source>"
+  preview-effect-line: "<gray>临时效果 <effect> [<combination>] <dark_gray>← <source>"
+  trial-started: "<green>隔离试运行已开始；只有你会受到草稿的临时效果与场地规则影响。"
   trial-stopped: "<yellow>隔离试运行已结束。"
   trial-failed: "<red>试运行失败: <reason>"
   game-ended: "<green>已结束 <id> 的战斗。"
   game-not-running: "<yellow><id> 当前没有进行中的游戏。"
+  game-end-confirm: "<yellow>这会立刻结束 <id> 的<mode>（revision <revision>），当前 <participants> 名参赛者会被结算并恢复装备。30 秒内再执行一次同样的命令即确认。"
   game-status: "<yellow><id>: <state>"
+  game-teams: "<yellow><id> 当前对阵: <gray>甲方 <a> <yellow>/ <gray>乙方 <b>"
+  game-teams-set: "<green>已把 <id> 的本场对阵设为 <a> 对 <b>。"
+  game-teams-failed: "<red>现在不能为 <id> 指定对阵（不是工会战、已经开局或已有报名者）。"
+  game-result: "<yellow><id> 结果: <gray><outcome> <dark_gray>(<reason>) <gray>胜者: <winner> <gray>奖励: <reward>"
 
 game:
   combat:
     restoring: "<yellow><name> 正在恢复上一局，请稍后重新进入。"
-    in-progress: "<yellow><name> 的战斗已经开始，你不会加入当前局。"
+    in-progress: "<yellow><name> 的比赛已经开始，你不会加入当前局。"
     full: "<red><name> 当前人数已满。"
-    not-combat: "<red>这个区域不是对战模式。"
-    not-inside: "<red>你不在这个场地内。"
-    already-started: "<yellow>战斗已经开始。"
-    ready: "<green><player> 已确认开始 (<current>/<total>)"
-    ready-prompt: "<yellow><name> 已满足开战人数。输入 <green>/regions game <id> ready <yellow>确认开始。"
-    removed: "<yellow>你已被移出本局战斗，复活后会恢复入场前状态。"
-    started: "<red>战斗开始！"
-    ended: "<yellow>战斗结束。"
-    waiting-players: "<yellow>还需要更多玩家进入场地 (<current>/<required>)。"
-    waiting-unions: "<yellow>工会战需要至少 <required> 个不同工会在场，目前识别到 <current> 个。"
-    not-ready: "<yellow>尚未满足开战条件。"
-    union-winner: "<gold>工会战结束，胜利工会: <yellow><union>"
+    already-started: "<yellow>比赛已经开始。"
+    ready: "<green><player> 已准备 (<current>/<total>)"
+    started: "<red>比赛开始！"
+    ended: "<yellow>比赛结束。"
+  match:
+    finishing: "<yellow>结算中：还有 <pending> 名玩家等待恢复装备（奖励：<reward>）。"
+    enter-prompt: "<yellow>这里是 <name> 的比赛场地。输入 <green>/regions game <id> join <yellow>报名；走进场地本身不算报名。"
+    rejoin: "<green>你已回到 <name>（<state>）。"
+    join:
+      ok: "<green>已报名 <name>。到场后输入 <yellow>/regions game <id> ready <green>准备。"
+      broadcast: "<green><player> 已报名 (<current>/<required>)"
+      leave: "<yellow><player> 退出了报名。"
+      unknown-region: "<red>找不到场地 <id>。"
+      unavailable: "<red>这个场地当前不可报名。"
+      not-a-match: "<red>这个场地不是对战类玩法。"
+      in-progress: "<yellow>比赛已经开始，请等待下一场或使用观战。"
+      already-joined: "<yellow>你已经在这场比赛的名单里。"
+      restoring: "<yellow>你的装备还在上一局的恢复队列里，恢复完成后才能报名新的一局。"
+      full: "<red>这场比赛人数已满。"
+      team-full: "<red>你要加入的国家已经满员。"
+      need-nation: "<red>报名工会战需要加入属于国家的领地。"
+      union-unavailable: "<red>工会数据来源当前不可用（<reason>），请稍后重试。"
+      team-unknown: "<red>找不到你选择的国家：<team>"
+      team-not-in-match: "<red>本场对阵只接受这些国家：<team>"
+      choose-nation: "<yellow>你同时属于多个国家，请选择代表 <name> 出战的一方："
+      choose-nation-line: "<gray>- <yellow><name> <dark_gray>(<id>) <gray>输入 <click:run_command:'<command>'><yellow><command></click>"
+    ready:
+      not-a-match: "<red>这个玩法没有准备流程。"
+      not-joined: "<yellow>你还没有报名这场比赛。输入 <green>/regions game <id> join <yellow>报名。"
+    unready: "<yellow><player> 取消了准备 (<current> 人已准备)。"
+    unready.not-possible: "<yellow>当前不能取消准备。"
+    leave.not-joined: "<yellow>你不在 <id> 的比赛名单里。"
+    spectate:
+      not-a-match: "<red>这个场地不是对战类玩法。"
+      no-match: "<yellow>这里现在没有可观看的比赛。"
+      is-participant: "<yellow>你正在参加这场比赛。"
+      joined: "<green>已加入 <id> 的观战名单，你不会参与战斗。"
+    waiting-players: "<yellow>等待更多报名者 (<current>/<required>)。"
+    waiting-ready: "<yellow>等待这些玩家准备：<waiting>"
+    waiting-roster: "<yellow>双方人数必须相等且满员才能开赛。"
+    waiting-teams: "<yellow>场地主还需要指定本场对战的双方国家。"
+    diplomacy:
+      not-enemies: "<yellow>本场设为仅敌对（enemy-only），但双方国家不是敌对关系。"
+      unverifiable: "<yellow>本场设为仅敌对（enemy-only），但当前工会数据来源无法验证双方敌对关系，已拒绝开赛。"
+    preparing: "<yellow>正在暂存装备并传送到出生点…"
+    gear-ready: "<green>你的装备已暂存，等待其他玩家就绪。"
+    countdown: "<red>战斗将在 <seconds> 秒后开始！"
+    started: "<red>第 <round>/<total> 回合开始！"
+    round.won: "<gold>第 <round> 回合结束，胜者：<yellow><winner> <gray>(<reason>)"
+    round.draw: "<gold>第 <round> 回合平局 <gray>(<reason>)"
+    intermission: "<yellow>回合间休整 <seconds> 秒，下一回合马上开始。"
+    eliminated: "<red>你已被淘汰（<reason>）。<killer>"
+    eliminated.broadcast: "<gray><player> 被淘汰，场上还剩 <alive> 人。"
+    restored: "<green>你的入场前状态已恢复（奖励：<reward>）。"
+    result:
+      win: "<gold>你赢下了这场比赛！对手/败者：<winner> <gray>(<reason>，奖励：<reward>)"
+      team-win: "<gold>你的国家赢下了这场比赛！<gray>(<reason>，奖励：<reward>)"
+      lose: "<yellow>比赛结束。胜者：<winner> <gray>(<reason>，奖励：<reward>)"
+      draw: "<yellow>比赛以平局结束 <gray>(<reason>，奖励：<reward>)"
+      aborted: "<red>比赛已中止 <gray>(<reason>，奖励：<reward>)"
+      none: "<gray>这场地还没有比赛结果。"
+    actionbar:
+      preparing: "<yellow>正在准备装备与点位…"
+      starting: "<red>即将开始！"
+      running: "<yellow>存活 <alive>/<total> · 第 <round> 回合 · 剩余 <time> 秒"
+    reason:
+      mutual: "同归于尽"
+      round-timeout: "回合超时"
+      opponent-down: "对手被淘汰"
+      rounds-won: "先赢下规定回合数"
+      rounds-exhausted: "回合用尽仍未分出胜负"
+      timeout: "达到时间上限"
+      nation-wiped: "对方国家全员淘汰"
+      last-standing: "最后存活"
+      death: "被击败"
+      left: "离开场地"
+      disconnect: "断线"
+      forced: "管理员强制结束"
+      start-aborted: "开赛准备失败"
+      server-stop: "服务器停止"
+      leave-command: "主动退出"
+      region-missing: "场地已不存在"
+      prepare-failed: "装备或传送失败"
+      roster-changed: "阵容变化"
+      prepare-timeout: "开赛准备超时"
   race:
     restoring: "<yellow><name> 正在结束上一局，请稍后重新进入。"
     in-progress: "<yellow><name> 的比赛已经开始，你会在下一局加入。"
@@ -209,9 +290,9 @@ gui:
         - "<gray>ID: <id>"
         - "<gray>Source: <source>"
         - "<gray>Lifecycle: <lifecycle> · r<revision>"
-        - "<gray>Mode: <mode>"
-        - "<gray>Flags: <flags>"
-        - "<gray>Effects: <effects>"
+        - "<gray>玩法: <mode>"
+        - "<gray>场地规则: <flags>"
+        - "<gray>临时效果: <effects>"
   main:
     title: "<dark_green>Regions"
     create:
@@ -249,17 +330,17 @@ gui:
         - "<gray><mode>"
         - "<dark_gray>点击设置对战、比赛或小游戏玩法。"
     flags:
-      name: "<aqua>Flags"
+      name: "<aqua>场地规则"
       lore:
         - "<gray><count> 个 flag"
         - "<dark_gray>点击切换常用规则。"
     effects:
-      name: "<aqua>Effects"
+      name: "<aqua>临时效果"
       lore:
         - "<gray><count> 个 effect"
         - "<dark_gray>点击添加或移除常用效果。"
     triggers:
-      name: "<aqua>Triggers & Actions"
+      name: "<aqua>触发条件与执行动作"
       lore:
         - "<gray><count> 个 action block"
         - "<dark_gray>点击配置进入/离开/开赛/完赛行为。"
@@ -267,7 +348,7 @@ gui:
       name: "<yellow>应用模板"
       lore:
         - "<gray>为这个领地重新选择一套完整场地预设。"
-        - "<yellow>确认后会整体替换 Mode、Flags、Effects 和 Triggers。"
+        - "<yellow>确认后会整体替换玩法、场地规则、临时效果和触发动作。"
     enable: "<green>点击启用"
     disable: "<yellow>点击禁用"
     validate:
@@ -298,16 +379,26 @@ gui:
     trial-start:
       name: "<aqua>开始我的隔离试运行"
       lore:
-        - "<gray>仅把草稿的 Effect 与 Flag 应用于你自己。"
-        - "<gray>不会启动 Mode、执行 Trigger 或影响其他玩家。"
+        - "<gray>仅把草稿的临时效果与场地规则应用于你自己。"
+        - "<gray>不会启动玩法、执行触发动作或影响其他玩家。"
     trial-stop:
       name: "<red>结束我的隔离试运行"
       lore:
         - "<gray>立即恢复你自己的状态。"
+    advanced: "<yellow>高级设置"
+    advanced.back: "<red>返回基础页"
+    publish.no-draft: "<gray>这个场地还没有草稿；先改一项设置或套用模板。"
+    trial-no-draft: "<gray>先创建草稿才能隔离试运行。"
+    preview-diff: "<yellow>查看完整 diff"
+    manage: "<yellow>比赛管理"
+    manage-status: "<yellow><id> 当前状态: <state>"
+    manage-roster: "<gray>名单 (<count>): <players>"
+    manage-result: "<gray>上一场结果: <outcome> <dark_gray>(<reason>)"
+    manage-hint: "<gray>开赛用 <yellow>/regions game <id> start<gray>，强制结束用 <yellow>/regions game <id> end<gray>（需二次确认）。"
     withdrawn: "<yellow>区域 <id> 已撤回为草稿。"
     withdraw-failed: "<red>撤回失败: <reason>"
   trial:
-    started: "<green>隔离试运行已开始；只有你会受到草稿 Effect 与 Flag 影响。"
+    started: "<green>隔离试运行已开始；只有你会受到草稿的临时效果与场地规则影响。"
     stopped: "<yellow>隔离试运行已结束。"
     failed: "<red>试运行失败: <reason>"
   delete:
@@ -343,40 +434,48 @@ gui:
     cuboid-format: "<red>格式错误，需要 world,minX,minY,minZ,maxX,maxY,maxZ。"
     name-blank: "<red>名称不能为空。"
   mode:
-    title: "<dark_green>Mode: <id>"
+    title: "<dark_green>玩法: <id>"
     current: "<green>当前模式"
     switch: "<gray>点击切换到此模式"
     key-value-required: "<red>请输入 key=value。"
     judge-unknown: "<red>找不到玩家 <name>。对方需要在本服登录过一次。"
     type:
       free_event:
-        name: "free_event"
+        name: "自由活动"
         lore:
-          - "<gray>通用活动场地，只使用 Flag 与 Effect。"
+          - "<gray>通用活动场地，只使用场地规则与临时效果。"
       run_race:
-        name: "run_race"
+        name: "跑步竞速"
         lore:
           - "<gray>跑步比赛，参赛者不能骑乘载具。"
       dual_pvp:
-        name: "dual_pvp"
+        name: "双人决斗"
         lore:
           - "<gray>双方或多人进场后确认开始。"
-          - "<gray>可设置 kit、armor、min-players。"
+          - "<gray>可设置装备预设、护甲预设与最低人数。"
       boat_race:
-        name: "boat_race"
+        name: "划船竞速"
         lore:
           - "<gray>划船比赛，参赛者必须坐在船上。"
       union_war:
-        name: "union_war"
+        name: "工会战（国家对战）"
         lore:
           - "<gray>读取 UnionProvider 判断工会。"
-          - "<gray>可设置 min-unions、kit、armor。"
+          - "<gray>可设置最低国家数、装备预设与护甲预设。"
       horse_race:
-        name: "horse_race"
+        name: "骑马竞速"
         lore:
           - "<gray>骑马比赛，参赛者必须骑马。"
       hide_and_seek:
-        name: "hide_and_seek"
+        name: "捉迷藏"
+        lore:
+          - "<gray>搜索者寻找隐藏者，隐藏者撑过回合时限即获胜。"
+          - "<gray>可设置寻找者数量、躲藏时长与回合时长。"
+      free_for_all:
+        name: "大乱斗（单命淘汰）"
+        lore:
+          - "<gray>每人一条命，最后存活者获胜；同批淘汰与超时存活为并列。"
+          - "<gray>可设置最低/最高人数、时限与出生点；本玩法不支持奖励来源。"
         lore:
           - "<gray>藏猫猫小游戏，自动分配寻找者和隐藏者。"
           - "<gray>寻找者攻击隐藏者即可找到对方，不造成伤害。"
@@ -394,7 +493,7 @@ gui:
       lore: ["<gray>点击切换。"]
     min-unions:
       name: "<yellow>最小工会数: <value>"
-      lore: ["<gray>union_war 使用。左键 +1，右键 -1。"]
+      lore: ["<gray>工会战使用。左键 +1，右键 -1。"]
     vehicle:
       name: "<yellow>全局检查方式: <value>"
       lore: ["<gray>点击循环: 步行/任意载具/船/马/矿车/不检查。"]
@@ -445,7 +544,7 @@ gui:
       lore: ["<gray>点击切换。"]
     start-mode:
       name: "<yellow>开赛方式: <value>"
-      lore: ["<gray>点击切换 vote / judge。"]
+      lore: ["<gray>点击切换：玩家准备后开始 / 裁判发令。"]
     radius:
       name: "<yellow>判定半径: <value>"
       lore: ["<gray>左键 +1，右键 -1。"]
@@ -459,7 +558,7 @@ gui:
         - "<yellow>右键把自己加入/移除。"
     seekers:
       name: "<yellow>寻找者数量: <value>"
-      lore: ["<gray>hide_and_seek 使用。左键 +1，右键 -1。"]
+      lore: ["<gray>捉迷藏使用。左键 +1，右键 -1。"]
     hide-seconds:
       name: "<yellow>躲藏时间: <value> 秒"
       lore: ["<gray>左键 +10 秒，右键 -10 秒。"]
@@ -472,37 +571,57 @@ gui:
     timeout-seconds:
       name: "<yellow>比赛超时: <value> 秒"
       lore: ["<gray>赛跑模式使用。左键 +60 秒，右键 -60 秒。", "<gray>最少 60 秒。"]
+    add-spawn:
+      name: "<yellow>添加出生点（当前 <count> 个）"
+      lore:
+        - "<gray>站在点位上点击，把你当前位置加入出生点列表。"
+        - "<gray>决斗需要正好 2 个；大乱斗每个可能参赛者一个。"
+        - "<gray>当前位置: <location>"
+    add-spawn-a:
+      name: "<yellow>添加甲方出生点（当前 <count> 个）"
+      lore:
+        - "<gray>站在点位上点击，加入甲方出生点列表。"
+        - "<gray>每名队员一个不重复点位。"
+        - "<gray>当前位置: <location>"
+    add-spawn-b:
+      name: "<yellow>添加乙方出生点（当前 <count> 个）"
+      lore:
+        - "<gray>站在点位上点击，加入乙方出生点列表。"
+        - "<gray>每名队员一个不重复点位。"
+        - "<gray>当前位置: <location>"
+    clear-spawns:
+      name: "<red>清空出生点"
+      lore: ["<gray>清空这个玩法设置的全部出生点。"]
+    best-of:
+      name: "<yellow>赛制: 先赢 <value> 局"
+      lore: ["<gray>点击在 1（一局定胜负）与 3（三局两胜）之间切换。"]
+    team-size:
+      name: "<yellow>每队人数: <value>"
+      lore: ["<gray>工会战双方各出这么多人。左键 +1，右键 -1。", "<gray>范围 2-10。"]
+    diplomacy:
+      name: "<yellow>外交: <value>"
+      lore: ["<gray>约战=双方确认即可（默认）；仅敌对=要求两个国家处于已验证的敌对关系，验证不了就不开赛。"]
+
     advanced:
       name: "<yellow>高级参数"
       lore:
         - "<gray>点击输入 key=value。"
         - "<gray>输入 clear \\<key> 可移除参数。"
   flag:
-    title: "<dark_green>Flags: <id>"
+    title: "<dark_green>场地规则: <id>"
     entry:
       name: "<yellow><flag>: <color><value>"
       lore:
-        - "<gray>点击循环: pass -> deny -> allow"
-        - "<dark_gray>pass 表示不覆盖 Lands 或服务器规则。"
+        - "<gray>点击循环: 沿用其他规则 -> 禁止 -> 允许"
+        - "<dark_gray>「沿用其他规则」表示不覆盖 Lands 或服务器规则。"
     advanced:
       name: "<yellow>高级参数"
       lore:
         - "<gray>点击输入 \\<flag> \\<值> [key=value...]。"
         - "<gray>例如 commands blocklist values=/spawn,/home。"
     usage: "<red>请输入 \\<flag> \\<值>。"
-    key:
-      pvp: "pvp"
-      fly: "fly"
-      vanish: "vanish"
-      item_drop: "item_drop"
-      item_pickup: "item_pickup"
-      commands: "commands"
-    value:
-      allow: "allow"
-      deny: "deny"
-      pass: "pass"
   effect:
-    title: "<dark_green>Effects: <id>"
+    title: "<dark_green>临时效果: <id>"
     entry:
       name: "<yellow><index>. <type>"
       lore:
@@ -526,17 +645,17 @@ gui:
         lore: ["<gray>potion SPEED amplifier=1。"]
       invisibility:
         name: "<aqua>压制隐身"
-        lore: ["<gray>用于 vanish: deny 场地。"]
+        lore: ["<gray>用于禁止隐身的场地规则。"]
     clear:
-      name: "<red>清空全部 Effects"
+      name: "<red>清空全部临时效果"
     advanced:
       name: "<yellow>高级参数"
       lore:
         - "<gray>点击输入 \\<effect> [key=value...]。"
         - "<gray>例如 scale value=0.5 或 potion effect=JUMP。"
-    type-required: "<red>Effect 类型不能为空。"
+    type-required: "<red>临时效果类型不能为空。"
   trigger:
-    title: "<dark_green>Triggers: <id>"
+    title: "<dark_green>触发动作: <id>"
     entry: "<yellow><trigger>: <count>"
     block-line: "<gray><name> [<execution>] -> <actions>"
     unnamed: "action"
@@ -556,29 +675,14 @@ gui:
         lore: ["<gray>on_finish -> broadcast"]
         text: "<gold><player> 完成了 <region_name>，名次 #<rank>。"
     advanced:
-      name: "<yellow>添加 Action"
+      name: "<yellow>添加执行动作"
       lore:
         - "<gray>输入 \\<trigger> \\<action> [key=value...]。"
         - "<gray>例如 on_enter message text=欢迎 <player>"
     clear:
-      name: "<red>清空全部 Triggers"
+      name: "<red>清空全部触发动作"
     usage: "<red>请输入 \\<trigger> \\<action>。"
     unknown: "<red>未知 trigger: <trigger>"
-    key:
-      on_enter: "on_enter"
-      on_leave: "on_leave"
-      on_death: "on_death"
-      on_kill: "on_kill"
-      on_respawn: "on_respawn"
-      on_interact: "on_interact"
-      on_command: "on_command"
-      on_timer: "on_timer"
-      on_mode_start: "on_mode_start"
-      on_mode_end: "on_mode_end"
-      on_role_assigned: "on_role_assigned"
-      on_found: "on_found"
-      on_checkpoint: "on_checkpoint"
-      on_finish: "on_finish"
   publish:
     title: "<dark_green>发布预览: <id>"
     change:
@@ -603,10 +707,10 @@ gui:
     effective:
       name: "<aqua>最终有效规则"
       lore:
-        - "<gray>Mode: <mode>"
-        - "<gray>主 Trigger Region: <trigger>"
-        - "<gray>Flags: <flags>"
-        - "<gray>Effects: <effects>"
+        - "<gray>玩法: <mode>"
+        - "<gray>主触发场地: <trigger>"
+        - "<gray>场地规则: <flags>"
+        - "<gray>临时效果: <effects>"
     confirm:
       name: "<green>确认发布 revision <revision>"
       lore:
@@ -644,6 +748,188 @@ gui:
       lore:
         - "<gray>页面 <page>/<pages>"
     owner-changed: "<yellow>该 area 的主人身份可能刚刚发生变化，列表已刷新。"
+  lobby:
+    title: "<dark_green>活动大厅 <gray><page>/<pages>"
+    entry:
+      name: "<aqua><name>"
+      lore:
+        - "<gray>玩法：<mode>"
+        - "<gray>状态：<status>"
+    reason:
+      joinable: "<green>可报名：走入场地即可加入"
+      running: "<yellow>比赛进行中，等待下一场"
+      restoring: "<yellow>正在恢复上一局，暂不能加入"
+      full: "<red>人数已满，稍后再来"
+      source-unavailable: "<red>缺少依赖：<source>"
+      unions-unavailable: "<red>需要工会数据来源（Lands）"
+    empty:
+      name: "<red>暂无可参与的活动场地"
+      lore:
+        - "<gray>等场地主发布后这里会显示。"
+    how-to-join: "<green>走入 <id> 的场地，然后输入 <yellow>/regions game <id> join <green>报名，站上点位后用 <yellow>/regions game <id> ready <green>准备。"
+    my-regions:
+      name: "<yellow>我的场地"
+      lore:
+        - "<gray>打开场地管理界面。"
+    filter:
+      mode:
+        name: "<yellow>玩法筛选: <mode>"
+        lore:
+          - "<gray>点击按玩法循环筛选；当前筛出 <count> 个场地。"
+      all: "全部玩法"
+      joinable:
+        name: "<yellow>只看可报名: <value>"
+        lore: ["<gray>点击切换，只留下现在能报名的场地。"]
+      clear:
+        name: "<red>清除筛选"
+        lore: ["<gray>回到全部场地。"]
+      empty:
+        name: "<red>没有符合筛选条件的场地"
+        lore: ["<gray>换一个玩法或关掉\"只看可报名\"。"]
+  wizard:
+    title: "<dark_green>创建场地：选择玩法"
+    back-to-mode: "<red>返回选择玩法"
+    no-template: "<yellow>这个玩法没有可用模板，已按 <mode> 的默认设置建好草稿，接着补必填项即可。"
+    back-to-area: "<red>返回选择地块"
+    settings:
+      title: "<dark_green>创建场地：<name>"
+      progress: "<yellow>必填项 <done>/<total>"
+      ready:
+        - "<green>必填项已齐，可以进行检查并发布。"
+      not-ready:
+        - "<red>还缺: <missing>"
+        - "<gray>补齐后才能进入检查发布页。"
+      respawn:
+        name: "<yellow>返回／观战点: <value>"
+        lore:
+          - "<gray>站在位置后点击，设为返回点。"
+          - "<gray>当前位置: <location>"
+      spawn:
+        name: "<yellow>出生点（已有 <count> 个）"
+        lore:
+          - "<gray>站在位置后点击，追加一个出生点。"
+          - "<gray>当前位置: <location>"
+      spawn-b:
+        name: "<yellow>乙方出生点（已有 <count> 个）"
+        lore:
+          - "<gray>站在位置后点击，追加一个乙方出生点。"
+          - "<gray>当前位置: <location>"
+      roster:
+        name: "<yellow>人数: <value>"
+        lore: ["<gray>点击调整。工会战调每队人数（2-10）；大乱斗调最低人数。"]
+      time:
+        name: "<yellow>时限: <value>"
+        lore: ["<gray>点击在 120／180／300／600 秒之间循环。"]
+      continue:
+        name: "<green>继续：检查并发布"
+        lore: ["<gray>必填项齐全后进入发布页。"]
+      rename:
+        name: "<yellow>修改名称"
+        lore: ["<gray>点击后在聊天里输入新名称。"]
+      blocked: "<yellow>还缺这些必填项：<missing>"
+      stale: "<red>这个草稿在设置期间被改过，已刷新到最新版本。"
+      field:
+        respawn: "返回点"
+        spawns: "出生点"
+        team-spawns: "乙方出生点"
+        kit: "装备预设"
+        roster: "人数"
+        time: "时限"
+    mode:
+      name: "<aqua><mode>"
+      unavailable:
+        reason:
+          - "<red>依赖不可用：需要工会数据来源（Lands）"
+      free_event:
+        summary:
+          - "<gray>无对抗的自由活动区域。"
+      run_race:
+        summary:
+          - "<gray>多人跑步/跑酷竞速，按到达终点顺序排名。"
+      dual_pvp:
+        summary:
+          - "<gray>2 人对决，先击败对手者获胜。"
+      boat_race:
+        summary:
+          - "<gray>多人划船竞速，按到达终点顺序排名。"
+      union_war:
+        summary:
+          - "<gray>两个工会各出等额队员，淘汰对方全员获胜。"
+      horse_race:
+        summary:
+          - "<gray>多人骑马竞速，按到达终点顺序排名。"
+      hide_and_seek:
+        summary:
+          - "<gray>搜索者寻找隐藏者，隐藏者撑过回合时限即获胜。"
+      free_for_all:
+        summary:
+          - "<gray>每人一条命，最后存活者获胜（4-16 人，单命淘汰）。"
+    issue-name: "<severity>项"
+    fix-hint:
+      goto: "<yellow>点击前往<target>设置处理，模式页可返回发布页"
+      none:
+        - "<gray>此项没有页面内修复入口，请按说明或联系管理员。"
+    fix-target:
+      mode: "玩法"
+      rules: "场地规则"
+      effects: "临时效果"
+      triggers: "触发动作"
+      source: "来源"
+  game:
+    title: "<dark_green><name> · 比赛报名"
+    rules:
+      gear-escrow: "<gray>开赛时将暂存你的原装备并发放统一装备，赛后自动恢复。"
+      gear-own: "<gray>使用自带装备，死亡掉落按服务器规则处理。"
+      gear-restore: "<gray>赛后恢复入场前的背包与经验。"
+      gear-keep: "<gray>你的装备不会被替换，比赛中的得失按服务器规则处理。"
+      duel-life: "<gray>单命对决：被击败即输掉本回合。"
+      duel-rounds: "<gray>赛制 <rounds> 局，每回合 <seconds> 秒。"
+      nation-life: "<gray>单命工会战：全员淘汰的国家落败。"
+      nation-roster: "<gray>每队 <size> 人，双方满员才开赛。"
+      ffa-life: "<gray>单命大乱斗：每人一条命，最后存活者获胜。"
+      round: "<gray>回合制：<seconds> 秒一轮。"
+      timeout: "<gray>比赛时限 <seconds> 秒，超时按规则判定。"
+      min-players: "<gray>至少 <count> 名玩家才会开局。"
+      leave-warning: "<red>开赛后退出或断线按弃权处理。"
+    join:
+      name: "<green>报名"
+      lore:
+        - "<gray>先读上面的规则，报名即表示同意。"
+        - "<gray>报名后到场再点准备。"
+    ready:
+      name: "<green>准备"
+      lore:
+        - "<gray>人数满足且全员准备后开赛。"
+    unready:
+      name: "<gray>取消准备"
+      lore:
+        - "<gray>开赛前随时可以取消。"
+    leave:
+      name: "<red>退出比赛"
+      lore:
+        - "<red>开赛后退出视为弃权。"
+    spectate:
+      name: "<yellow>观战"
+      lore:
+        - "<gray>只在场外观战，不参与战斗。"
+    participant:
+      name: "<aqua><player>"
+      lore:
+        - "<gray>状态：<state>"
+    team:
+      name: "<aqua><team>"
+      lore:
+        - "<gray>点击代表这个国家出战。"
+    result:
+      name: "<gold>上一局：<outcome>"
+      lore:
+        - "<gray>原因：<reason>"
+        - "<gray>奖励：<reward>"
+    how-to-join: "<yellow>走入 <id> 的场地后输入 /regions game <id> join 报名。"
+    back-to-lobby: "<yellow>返回活动大厅"
+  advanced:
+    title: "<dark_green>高级设置: <id>"
+    back: "<red>返回基础页"
   template:
     title: "<dark_green>选择场地模板 <page>/<pages>"
     entry:
@@ -651,10 +937,10 @@ gui:
       lore:
         - "<gray><description>"
         - "<dark_gray>将应用以下配置："
-        - "<gray>Mode: <mode>"
-        - "<gray>Flags: <flags>"
-        - "<gray>Effects: <effects>"
-        - "<gray>Triggers: <triggers>"
+        - "<gray>玩法: <mode>"
+        - "<gray>场地规则: <flags>"
+        - "<gray>临时效果: <effects>"
+        - "<gray>触发动作: <triggers>"
       create-hint: "<green>点击验证并创建场地。"
       apply-hint: "<yellow>点击检查并替换当前配置。"
     parameters: "<yellow>参数: <keys>"
@@ -677,14 +963,14 @@ gui:
       summary:
         name: "<aqua>新预设: <name>"
         lore:
-          - "<gray>Mode: <mode>"
-          - "<gray>Flags: <flags>"
-          - "<gray>Effects: <effects>"
-          - "<gray>Triggers: <triggers>"
+          - "<gray>玩法: <mode>"
+          - "<gray>场地规则: <flags>"
+          - "<gray>临时效果: <effects>"
+          - "<gray>触发动作: <triggers>"
       warning:
         name: "<red>替换当前玩法配置"
         lore:
-          - "<red>当前 Mode、Flags、Effects 和 Triggers 会被清空。"
+          - "<red>当前玩法、场地规则、临时效果和触发动作会被清空。"
           - "<gray>领地 ID、来源、主人、优先级和历史版本保持不变。"
       apply:
         name: "<green>确认并保存为草稿"
@@ -697,3 +983,321 @@ gui:
     horse: "马"
     minecart: "矿车"
     ignore: "不检查"
+labels:
+  common:
+    "on": "<green>开启"
+    "off": "<gray>关闭"
+    allow: "允许"
+    deny: "禁止"
+    pass: "沿用其他规则"
+    unknown: "未知"
+  source:
+    lands: "Lands 领地"
+    cuboid: "立方体场地"
+  mode:
+    free_event: "自由活动"
+    dual_pvp: "双人决斗"
+    union_war: "工会战（国家对战）"
+    free_for_all: "大乱斗（单命淘汰）"
+    run_race: "跑步竞速"
+    boat_race: "划船竞速"
+    horse_race: "骑马竞速"
+    hide_and_seek: "捉迷藏"
+  flag:
+    pvp: "玩家对战"
+    fly: "允许飞行"
+    vanish: "隐身保护"
+    item_drop: "丢弃物品"
+    item_pickup: "拾取物品"
+    commands: "命令使用"
+  effect:
+    scale: "体型缩放"
+    potion: "药水效果"
+    walk_speed: "移动速度"
+    fly_speed: "飞行速度"
+    allow_flight: "飞行能力"
+    glowing: "发光"
+    invisibility_suppression: "反隐身"
+  action:
+    message: "发送消息"
+    title: "标题提示"
+    sound: "播放音效"
+    console_command: "控制台命令"
+    player_command: "玩家命令"
+    effect_apply: "添加临时效果"
+    effect_clear: "移除临时效果"
+    broadcast: "全服广播"
+    teleport: "传送"
+    heal: "恢复生命"
+    feed: "恢复饥饿"
+    extinguish: "熄灭火焰"
+    give_item: "给予物品"
+    take_item: "移除物品"
+    set_metadata: "写入标记"
+    clear_metadata: "清除标记"
+    cleanup_region: "清理区域状态"
+    mode_command: "玩法操作"
+  condition:
+    permission: "权限判断"
+    region: "场地判断"
+    mode: "玩法判断"
+    chance: "概率判断"
+    has_union: "有工会判断"
+    union: "指定工会"
+    metadata: "标记判断"
+    session_metadata: "会话标记判断"
+  trigger:
+    on_enter: "进入场地"
+    on_leave: "离开场地"
+    on_death: "死亡"
+    on_kill: "击杀"
+    on_respawn: "重生"
+    on_interact: "交互"
+    on_command: "执行命令"
+    on_timer: "定时触发"
+    on_mode_start: "玩法开始"
+    on_mode_end: "玩法结束"
+    on_role_assigned: "角色分配"
+    on_found: "被找到"
+    on_checkpoint: "经过检查点"
+    on_finish: "完成比赛"
+  start-mode:
+    vote: "玩家准备后开始"
+    judge: "裁判发令"
+  severity:
+    error: "错误"
+    warning: "警告"
+  state:
+    idle: "空闲"
+    waiting: "等待准备 <ready>/<required>"
+    preparing: "准备开赛"
+    running: "进行中，玩家 <players> 人"
+    restoring: "正在恢复上一局"
+  counter:
+    finished: "已完成"
+    seekers: "搜索者"
+    hiders: "躲藏者"
+    found: "已找到"
+    released: "已释放"
+    unions: "国家数"
+    alive: "存活"
+    round: "回合"
+    spectators: "观战"
+  participant:
+    waiting: "尚未准备"
+    ready: "已准备"
+    alive: "存活"
+    eliminated: "已淘汰"
+    left: "已退出"
+    restoring: "恢复中"
+    restored: "已恢复"
+  outcome:
+    natural: "分出胜负"
+    draw: "平局"
+    timeout: "超时结束"
+    abandoned: "弃权结束"
+    aborted: "已中止"
+  reward:
+    none: "无"
+    pending: "处理中"
+    settled: "已发放"
+    refunded: "已退款"
+    review_required: "待管理员复核"
+  field:
+    min-players: "最低人数"
+    max-players: "最高人数"
+    min-unions: "最低国家数"
+    require-ready: "需要全员准备"
+    replace-gear: "替换装备"
+    require-start: "需要发令"
+    teleport-start: "开赛传送"
+    start-mode: "启动方式"
+    timeout-seconds: "时限（秒）"
+    kit: "装备预设"
+    armor: "护甲预设"
+    offhand: "副手预设"
+    vehicle: "载具"
+    radius: "生效半径"
+    spawn-points: "出生点"
+    spawn-points-b: "乙方出生点"
+    best-of: "赛制"
+    team-size: "每队人数"
+    reward-source: "奖励来源"
+    reward-contract: "奖励合同"
+  seeker-kit: "搜索者装备"
+  hider-kit: "躲藏者装备"
+  respawn: "返回点"
+  start: "出发点"
+  finish: "终点"
+  checkpoint-vehicles: "检查点载具"
+  hide-seconds: "躲藏时长（秒）"
+  round-seconds: "回合时长（秒）"
+  seekers: "搜索者人数"
+  dependency:
+    enabled: "已启用"
+    missing: "插件缺失或未启用"
+  reason:
+    plugin-disable: "插件关闭"
+    reload: "重载"
+    manual-command: "手动命令"
+    start-failed: "启动失败"
+    players-left: "玩家离场"
+    death: "死亡"
+    leave-command: "主动退出"
+    server-stop: "服务器停止"
+    region-missing: "场地已不存在"
+    prepare-failed: "装备或传送失败"
+    roster-changed: "阵容变化"
+    start-aborted: "开赛准备失败"
+    decided: "胜负已定"
+    restored: "恢复完成"
+    empty: "无人报名"
+    funding-mapping: "奖励身份映射失败"
+errors:
+  action-text-conflict: "动作 <type> 同时设置了 <field> 与它的 *-key 形式，二者互斥（触发 <trigger>）。"
+  action-text-required: "动作 <type> 需要 text 或 text-key 之一（触发 <trigger>）。"
+  effect-unknown-type: "未知的临时效果类型：<type>"
+  effect-not-implemented: "临时效果 <type> 已注册但尚未实现。"
+  effect-parameter-required: "临时效果 <type> 缺少参数 <parameter>。"
+  effect-attribute-unavailable: "当前服务端没有提供 <type> 需要的属性。"
+  effect-potion-unknown: "药水效果 <effect> 不存在。"
+  effect-lease-player-mismatch: "效果租约与玩家不匹配，已拒绝恢复。"
+  effect-restore-failed: "恢复临时效果 <type> 失败，租约已保留等待重试。"
+  effect-escrow-persist-failed: "无法保存效果托管记录，本次效果已撤销。"
+  effect-escrow-clear-failed: "效果已恢复，但托管记录删除失败，将在下次启动重试。"
+  effect-escrow-rollback-failed: "无法保存效果托管记录，且回滚失败，请检查磁盘权限。"
+  region-not-frozen: "场地 <id> 当前不是冻结状态。"
+  region-validation-failed: "场地配置有 <count> 项校验问题，未写入。"
+  source-owner-unresolved: "来源 <source> 解析不出当前主人，无法复核。"
+  trial-validation-failed: "试运行前校验未通过（<count> 项），未启动。"
+  trial-effect-failed: "试运行应用临时效果失败，已回滚。"
+  region-id-blank: "场地 ID 不能为空。"
+  region-id-invalid: "场地 ID 只能包含 2-48 个小写字母、数字、下划线或连字符（当前：<id>）。"
+  region-name-blank: "场地名称不能为空。"
+  source-unknown: "未知的场地来源类型：<type>"
+  source-unavailable: "来源 <type> 当前不可用，请先安装或启用它依赖的插件。"
+  source-unresolved: "来源 <source> 无法解析，请重新绑定到一个你拥有的领地。"
+  mode-unknown: "未知玩法：<type>"
+  flag-unknown: "未知或不可用的场地规则：<key>"
+  effect-unknown: "未知临时效果：<type>"
+  trigger-no-runtime: "触发条件 <trigger> 没有运行逻辑，永远不会生效。"
+  condition-unknown: "触发 <trigger> 中有未知判断：<type>"
+  action-unknown: "触发 <trigger> 中有未知动作：<type>"
+  funding-unavailable: "奖励服务暂不可用（<code>），请稍后重试或联系管理员。"
+  max-players-below-min: "<field> 必须为 0（不限制）或不低于最低人数（<min>）。"
+  min-players-below: "玩法 <type> 要求最低人数至少为 2。"
+  combat-timeout-invalid: "<field> 必须是正整数秒。"
+  best-of-invalid: "双人决斗的赛制只能是 1（一局定胜负）或 3（三局两胜）。"
+  team-size-invalid: "工会战每队人数必须在 2 到 10 之间。"
+  spawn-point-invalid: "出生点 <entry> 格式不对，应为 世界,x,y,z[,yaw,pitch]。"
+  spawn-points-count: "出生点数量不足：需要 <required> 个不重复点位，当前 <current> 个。"
+  spawn-points-spacing: "部分出生点间距小于建议的 <minimum> 格，建议补充出生点。"
+  free-for-all-capacity: "大乱斗本版本最多支持 <limit> 人（当前设置 <max>）。"
+  free-for-all-reward-unsupported: "大乱斗暂不支持奖励来源，请移除 reward-source / reward-contract。"
+  draft-revision-stale: "这份草稿已经被其他管理员改成 revision <actual>（你基于 <expected> 修改）。已拒绝写入，请重新打开页面确认最新内容。"
+  publish-preview-stale: "草稿在你预览之后变成了 revision <actual>（你确认的是 <expected>）。已拒绝发布，请重新预览再确认。"
+  min-unions-above-players: "最低国家数（<min-unions>）不能超过最低人数（<min-players>）。"
+  race-timeout-invalid: "<field> 必须是正整数秒。"
+  checkpoint-vehicles-mismatch: "<field> 的条目数必须与检查点数量一致。"
+  round-seconds-not-after-hide: "回合时长必须大于躲藏时长。"
+  seekers-above-min-players: "搜索者人数必须低于最低人数。"
+  item-list-too-many: "<field> 最多只能有 <max> 条物品。"
+  item-entry-invalid: "<field> 的物品 <entry> 格式不对，应为 物品ID[:数量]，数量 1-64。"
+  location-required: "缺少 <field> 的坐标。"
+  location-invalid: "<field> 的坐标格式应为 世界,x,y,z[,yaw,pitch]。"
+  world-unloaded: "<field> 指向的世界 <world> 尚未加载。"
+  sound-invalid: "音效 ID <sound> 无效（触发 <trigger>）。"
+  sound-unknown: "音效 <sound> 不存在（触发 <trigger>）。"
+  potion-key-invalid: "药水效果 ID <effect> 无效。"
+  potion-unknown: "药水效果 <effect> 不存在。"
+  capability-unknown: "未知能力：<kind> <id>"
+  capability-not-stable: "能力 <kind> <id> 尚处于 <status> 状态，不能发布。"
+  parameter-required: "能力 <capability> 缺少参数 <parameter>。"
+  parameter-unknown: "能力 <capability> 不支持参数 <parameter>。"
+  parameter-blank: "能力 <capability> 的参数 <parameter> 不能为空。"
+  parameter-integer: "能力 <capability> 的 <parameter> 必须是整数。"
+  parameter-number: "能力 <capability> 的 <parameter> 必须是有效数字。"
+  parameter-boolean: "能力 <capability> 的 <parameter> 必须是 true 或 false（即开启／关闭）。"
+  parameter-enum: "能力 <capability> 的 <parameter> 只能是：<values>"
+  parameter-min: "能力 <capability> 的 <parameter> 不能小于 <min>。"
+  parameter-max: "能力 <capability> 的 <parameter> 不能大于 <max>。"
+  overlap-stateful-mode: "重叠场地中出现了多个带状态的玩法（<modes>），同一片区域只能保留一个。"
+  overlap-flag-priority: "重叠的规则 <key> 按优先级采用了 <source> 的 <value>。"
+  overlap-effect-strategy: "重叠的效果 <family> 组合方式不一致，采用 <source> 的 <strategy>。"
+  overlap-effect-exclusive: "互斥效果 <family> 被多个重叠场地同时提供（<regions>）。"
+  union-war-fallback-provider: "工会战需要可用的工会数据来源，当前的后备提供方无法识别工会。"
+  console-command-warning: "本版本包含控制台命令动作，将以服务器控制台权限执行并记录审计。"
+  console-command-superadmin-only: "控制台命令仅限 Regions 超级管理员使用，场地主不能发布。"
+  dependency-unavailable: "依赖 <id> 不可用：<detail>"
+  cross-source-geometry-unproven: "无法静态证明与来源 <sources> 的几何关系；运行期优先级、效果组合与主触发规则仍然确定。"
+  region-already-exists: "场地 <id> 已存在。"
+  region-limit-reached: "场地数量已达上限（当前 <current>/<max>）。"
+  region-no-draft: "场地 <id> 没有草稿。"
+  publish-blocked: "发布被阻止，共有 <count> 个错误；请先在发布页处理。"
+  region-not-found: "找不到场地：<id>"
+  region-not-published: "场地 <id> 尚未发布。"
+  revision-not-found: "场地 <id> 没有版本 <revision>。"
+  persist-failed: "写入 regions.yml 失败，已还原磁盘上的原有内容。"
+templates:
+  mini_kingdom:
+    name: "小人国"
+    description: "玩家进入后缩小，禁飞、禁隐身、禁 PVP。"
+    enter:
+      title: "<green>小人国"
+      subtitle: "<gray>离开区域后自动恢复"
+  event_plaza:
+    name: "活动广场"
+    description: "轻量活动区域，默认禁 PVP 和禁飞。"
+  run_race:
+    name: "跑步赛道"
+    description: "跑步/跑酷比赛。创建时会问你要起点和终点；检查点可选，之后在 GUI 里加。"
+    finish:
+      text: "<gold>{player} 完成比赛，名次 #{rank}，用时 {race_time_ms}ms。"
+  boat_race:
+    name: "划船赛道"
+    description: "划船比赛。参赛者必须坐在船上才会记录检查点和终点。创建时会问你要起点和终点。"
+    finish:
+      text: "<gold>{player} 划船到达终点，名次 #{rank}。"
+  horse_race:
+    name: "骑马赛道"
+    description: "骑马比赛。参赛者必须骑马才会记录检查点和终点。创建时会问你要起点和终点。"
+    finish:
+      text: "<gold>{player} 骑马到达终点，名次 #{rank}。"
+  dual_pvp:
+    name: "双人决斗场"
+    description: "2 名玩家进入后全员确认开始，开战时扣押原装备并发放指定装备。"
+    start:
+      title: "<red>决斗开始"
+      subtitle: "<gray>击败对手后会自动恢复装备"
+    end:
+      text: "<yellow>决斗结束，装备已恢复。"
+  union_war:
+    name: "工会战场"
+    description: "两个国家的等额阵容对战，单命淘汰。创建时会问你要返回点和双方出生点。"
+    start:
+      text: "<red>工会战开始！代表你的国家活到最后。"
+    end:
+      text: "<yellow>工会战结束，装备已恢复。"
+  free_for_all:
+    name: "大乱斗场"
+    description: "每人一条命，最后存活者获胜。创建时会问你要返回点和 4 个出生点；要开更多人请在玩法页补点。"
+    start:
+      text: "<red>大乱斗开始！每人一条命，最后存活者获胜。"
+    end:
+      text: "<yellow>大乱斗结束，装备已恢复。"
+  hide_and_seek:
+    name: "藏猫猫场地"
+    description: "回合制小游戏。玩家进入后 ready，开局自动分配寻找者和隐藏者。寻找者攻击隐藏者即找到对方，不造成真实伤害。"
+    start:
+      title: "<green>藏猫猫开始"
+      subtitle: "<gray>寻找者稍后释放"
+    assigned:
+      text: "<yellow>你的身份已经分配，请查看聊天提示。"
+    found:
+      text: "<gold>{player} 被找到了。"
+    end:
+      text: "<yellow>小游戏结束，临时状态已恢复。"
+language-disabled: "当前服务器未启用玩家语言选择（locale-mode: server）。"
+language-current: "你的语言：<locale>（/regions language <zh_CN|en_US|auto> 修改）"
+language-set: "语言已切换为 <locale>。"
+language-cleared: "已恢复自动语言，跟随客户端设置。"

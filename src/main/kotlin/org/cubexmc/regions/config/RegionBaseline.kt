@@ -21,25 +21,36 @@ object RegionBaseline {
     val files: List<BaselineFile> = listOf(
         BaselineFile("config.yml", "config-version", 4),
         BaselineFile("regions.yml", "regions-version", 4),
-        BaselineFile("templates.yml", "templates-version", 1),
-        BaselineFile("lang/zh_CN.yml", "lang-version", 7),
-        BaselineFile("lang/en_US.yml", "lang-version", 7),
+        BaselineFile("templates.yml", "templates-version", 2),
+        BaselineFile("lang/zh_CN.yml", "lang-version", 8),
+        BaselineFile("lang/en_US.yml", "lang-version", 8),
     )
 
     /**
      * 每个基线文件一份迁移计划。
      *
-     * 目前**没有任何步骤**：首个公开版本就是起点。缺版本键的文件按 [BaselineFile.version] 补写
-     * （首发基线本身），版本更旧的文件因为没有可用步骤而失败——与此前"直接报错"的行为一致，
-     * 但现在带备份、回滚与 `MigrationReport`，服主能看清是哪个文件卡住了。
+     * 语言文件带 6→7（[LangV6ToV7Step]：模板确认 GUI 补键、拆 `create-hint`）与
+     * 7→8（[LangV7ToV8Step]：把 v7 之后新增的 `labels.*`／`errors.*` 等叶子键按同语言内置文本补齐）
+     * 两条步骤；其余文件仍无步骤——首发基线就是起点。
+     * 缺版本键的文件按 [BaselineFile.version] 补写（首发基线本身），版本更旧的文件因为没有
+     * 可用步骤而失败，但现在带备份、回滚与 `MigrationReport`，服主能看清是哪个文件卡住了。
      *
      * 以后改格式：把版本号 +1，并在这里 `addStep(...)`。
      */
     fun plans(): List<MigrationPlan> =
         files.map { baseline ->
-            MigrationPlan.yaml("Regions ${baseline.path}", baseline.path)
+            val plan = MigrationPlan.yaml("Regions ${baseline.path}", baseline.path)
                 .versionKey(baseline.versionKey)
                 .missingVersion(baseline.version)
                 .targetVersion(baseline.version)
+            if (baseline.versionKey == "lang-version") {
+                val locale = baseline.path.substringAfterLast('/').removeSuffix(".yml")
+                plan.addStep(LangV6ToV7Step(locale))
+                plan.addStep(LangV7ToV8Step(locale))
+            }
+            if (baseline.path == "templates.yml") {
+                plan.addStep(TemplatesV1ToV2Step())
+            }
+            plan
         }
 }

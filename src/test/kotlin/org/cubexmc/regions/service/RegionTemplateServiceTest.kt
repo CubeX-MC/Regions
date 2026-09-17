@@ -145,14 +145,20 @@ class RegionTemplateServiceTest {
             // 不填就套不上，没有中间的"悄悄用默认值"。
             assertFalse(service.apply(template.id, base).success, "${template.id} applied with no locations")
 
-            val supplied = locations.associate { it.id to "arena,12,64,-30" }
+            // 每个坐标都必须真的落到 Mode 上：同名键直接落值，`spawn-a`/`spawn-1` 这类
+            // 组合进 `spawn-points` 的字段则必须出现在某个值里（不能悄悄丢掉）。
+            val supplied = locations.mapIndexed { index, parameter ->
+                parameter.id to "arena,${12 + index},64,-30"
+            }.toMap()
             val applied = service.apply(template.id, base, supplied)
             assertTrue(applied.success, "${template.id} rejected valid locations: ${applied.errors}")
-            for (parameter in locations) {
-                assertEquals(
-                    "arena,12,64,-30",
-                    applied.region?.mode?.values?.get(parameter.id),
-                    "${template.id}.${parameter.id} did not reach the mode",
+            val modeValues = applied.region?.mode?.values.orEmpty()
+            for ((parameterId, expected) in supplied) {
+                val direct = modeValues[parameterId] == expected
+                val composed = modeValues.values.any { it.contains(expected) }
+                assertTrue(
+                    direct || composed,
+                    "${template.id}.$parameterId did not reach the mode (values=$modeValues)",
                 )
             }
         }
@@ -208,6 +214,63 @@ class RegionTemplateServiceTest {
     }
 
     /** 加载随包发布的那份 templates.yml，而不是测试里现造的合成模板。 */
+/**
+     * 升级安装的 `templates.yml` 不含后来新增的内置模板，而 `saveIfMissing` 只在文件缺失时写入。
+     * 不补进内存的话，新玩法在 GUI 里就没有创建入口（2026-09-13 实服验证发现）。
+     */
+    @Test
+    fun `built-ins missing from the owner file are merged in memory without touching the file`() {
+        val ownerFile = tempDir.resolve("owner-templates.yml").toFile()
+        ownerFile.writeText(
+            """
+            templates-version: 2
+
+            templates:
+              custom_one:
+                name: "My own template"
+                mode:
+                  type: free_event
+              # 服主自己的注释与排版必须原样保留
+            """.trimIndent(),
+        )
+        val before = ownerFile.readText()
+
+        val service = RegionTemplateService(ownerFile) {
+            javaClass.getResourceAsStream("/templates.yml")
+        }
+        val merged = service.load()
+
+        // 内置模板补进来了，服主自己的模板和文件内容都没被动过。
+        assertTrue(service.all().any { it.id == "custom_one" }, "the owner's own template must survive")
+        assertTrue(service.all().any { it.id == "free_for_all" }, "missing built-ins must be merged")
+        assertTrue(merged.contains("free_for_all"), "the merge must report what it added")
+        assertTrue(!merged.contains("custom_one"), "existing ids are not 'added'")
+        assertEquals(before, ownerFile.readText(), "templates.yml must not be rewritten")
+    }
+
+    @Test
+    fun `an owner template with the same id as a built-in wins`() {
+        val ownerFile = tempDir.resolve("owner-override.yml").toFile()
+        ownerFile.writeText(
+            """
+            templates-version: 2
+
+            templates:
+              free_for_all:
+                name: "Owner's own brawl"
+                mode:
+                  type: free_event
+            """.trimIndent(),
+        )
+
+        val service = RegionTemplateService(ownerFile) {
+            javaClass.getResourceAsStream("/templates.yml")
+        }
+        service.load()
+
+        assertEquals("Owner's own brawl", service.all().single { it.id == "free_for_all" }.name)
+    }
+
     private fun loadShippedTemplates(): RegionTemplateService {
         val file = tempDir.resolve("shipped-templates.yml").toFile()
         val stream = requireNotNull(javaClass.getResourceAsStream("/templates.yml")) { "missing shipped templates.yml" }
