@@ -63,6 +63,25 @@ class CombatMatchCoordinatorTest {
     private var enemyRelation: Boolean? = null
 
     @Test
+    fun `combat waits for teleport completion and aborts a failed teleport`() {
+        val h = harness()
+        val region = duelRegion()
+        val first = player("First")
+        val second = player("Second")
+        h.register(region, first, second)
+        val pending = java.util.concurrent.CompletableFuture<Boolean>()
+        `when`(h.scheduler.teleportAsync(anyK<Entity>(), anyK<org.bukkit.Location>())).thenReturn(pending)
+        val coordinator = h.coordinator()
+        coordinator.join(first, region.id)
+        coordinator.join(second, region.id)
+        coordinator.ready(first, region.id)
+        coordinator.ready(second, region.id)
+        assertEquals(MatchPhase.PREPARING, h.matchStore.activeForRegion(region.id)?.phase)
+        pending.complete(false)
+        assertEquals(MatchOutcome.ABORTED, coordinator.result(region.id)?.outcome)
+    }
+
+    @Test
     fun `prepare barrier failure aborts the match and releases the escrow it already took`() {
         val harness = harness()
         val region = duelRegion()
@@ -568,7 +587,8 @@ class CombatMatchCoordinatorTest {
         }.`when`(scheduler).runGlobalLater(anyK<Runnable>(), anyLong())
         `when`(scheduler.runGlobalTimer(anyK<Runnable>(), anyLong(), anyLong()))
             .thenReturn(mock(CubexTask::class.java))
-        doAnswer { null }.`when`(scheduler).teleportAsync(anyK<Entity>(), anyK<org.bukkit.Location>())
+        doAnswer { java.util.concurrent.CompletableFuture.completedFuture(true) }
+            .`when`(scheduler).teleportAsync(anyK<Entity>(), anyK<org.bukkit.Location>())
 
         val world = mock(World::class.java)
         worlds["world"] = world

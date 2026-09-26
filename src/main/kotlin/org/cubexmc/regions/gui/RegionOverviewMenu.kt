@@ -7,6 +7,7 @@ import org.bukkit.inventory.ItemStack
 import org.bukkit.persistence.PersistentDataType
 import org.cubexmc.regions.mode.gameStatusLine
 import org.cubexmc.regions.model.RegionDefinition
+import org.cubexmc.regions.service.VenueReadiness
 import org.cubexmc.regions.model.RegionLifecycle
 import org.cubexmc.regions.model.ValidationSeverity
 import org.cubexmc.regions.service.RegionOverlapResolver
@@ -92,6 +93,7 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
             text.component(player, "gui.detail.title", mapOf("id" to region.id)),
         )
         inventory.setItem(RegionDetailLayout.INFO_SLOT, items.region(player, region))
+        inventory.setItem(RegionDetailLayout.READINESS_SLOT, readinessItem(player, region))
         inventory.setItem(
             RegionDetailLayout.BASIC_OPERATIONS.keys.elementAt(0),
             text.item(
@@ -166,6 +168,36 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
      * 高级页（PLAN.md §5.2）：规则组合、临时效果、触发动作、应用模板、原始 ID 与完整 diff、
      * 历史版本，以及启用停用、清理、撤回发布与删除这些不常用但必要的入口。
      */
+    /**
+     * "现在能不能开一场" —— 与活动大厅的灰卡原因、向导的必填项同一份判定（[VenueReadiness]）。
+     *
+     * 场地主不应该先发布、再去大厅看自己的场地是不是灰的，才知道还缺什么。
+     */
+    private fun readinessItem(player: Player, region: RegionDefinition): ItemStack {
+        val source = plugin.sources().find(region.source.type)
+        val report = VenueReadiness.evaluate(
+            region,
+            configIssues = plugin.validation().validate(region),
+            sourceAvailable = source?.isAvailable() == true,
+            sourceLabel = text.label(player, "labels.source." + region.source.type, region.source.type),
+            unionsAvailable = plugin.unions().active()?.type != "fallback",
+            restoring = plugin.combatModes().isCombatMode(region) && plugin.combatModes().isEnding(region.id),
+        )
+        if (report.ready) {
+            return text.item(player, Material.LIME_DYE, "gui.detail.readiness.ready")
+        }
+        val reasons = report.blockers.take(READINESS_LINES).map { blocker ->
+            text.text(player, "readiness." + blocker.code, blocker.args)
+        }
+        return text.item(
+            player,
+            Material.RED_DYE,
+            "gui.detail.readiness.blocked",
+            mapOf("count" to report.blockers.size.toString()),
+            extraLore = reasons,
+        )
+    }
+
     fun openDetailAdvanced(player: Player, regionId: String) {
         val region = gui.editable(regionId) ?: return openMain(player)
         if (!gui.canManageRegion(player, region)) return
@@ -402,6 +434,9 @@ internal class RegionOverviewMenu(private val gui: RegionsGui) {
  * [RegionDetailLayoutTest] 断言 [BASIC_OPERATIONS] 恰好 5 项、槽位不重复，并且每个标签键在
  * 中英两个语言文件里都存在。新增第 6 个基础操作会直接让用例失败。
  */
+/** 摘要里最多列几条原因；剩下的用总数表示。 */
+private const val READINESS_LINES = 4
+
 internal object RegionDetailLayout {
 
     /** 基础页的 5 个操作：槽位 → 标签键。 */
@@ -414,6 +449,9 @@ internal object RegionDetailLayout {
     )
 
     const val INFO_SLOT = 4
+
+    /** “现在能不能开一场”的摘要位。 */
+    const val READINESS_SLOT = 8
     const val BACK_SLOT = 34
 
     /** 高级页入口：是导航，不计入"5 个操作"。 */

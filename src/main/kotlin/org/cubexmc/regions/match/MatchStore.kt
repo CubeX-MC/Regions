@@ -27,6 +27,13 @@ class MatchStore(
     private val logger: CubexLogger,
 ) : Reloadable, Terminable {
     private val matches: MutableMap<UUID, MatchSnapshot> = LinkedHashMap()
+
+    /**
+     * 每个场地**最后一次**比赛结果。比赛收尾时会把整条记录删掉（否则文件无限增长），
+     * 结果却要活得更久一点：重启后 `/regions game <id> result` 不该变成一片空白。
+     * 按场地各留一条，所以容量跟场地数走，不会膨胀。
+     */
+    private val lastResults: MutableMap<String, MatchResult> = LinkedHashMap()
     private var dirty = false
 
     val isDirty: Boolean
@@ -48,6 +55,16 @@ class MatchStore(
         matches[snapshot.matchId] = snapshot
         dirty = true
     }
+
+    /** 记下某场地最近一次的结果；[MatchResult.regionId] 就是键。 */
+    @Synchronized
+    fun putResult(result: MatchResult) {
+        lastResults[result.regionId] = result
+        dirty = true
+    }
+
+    @Synchronized
+    fun lastResult(regionId: String): MatchResult? = lastResults[regionId]
 
     @Synchronized
     fun remove(matchId: UUID) {
@@ -89,8 +106,20 @@ class MatchStore(
                 }
             }
         }
+        val loadedResults = LinkedHashMap<String, MatchResult>()
+        if (file.exists()) {
+            val yaml = YamlConfiguration().apply { load(file) }
+            yaml.getConfigurationSection("results")?.let { root ->
+                for (regionId in root.getKeys(false)) {
+                    val entry = root.getConfigurationSection(regionId) ?: continue
+                    loadedResults[regionId] = decodeResult(regionId, entry)
+                }
+            }
+        }
         matches.clear()
         matches.putAll(loaded)
+        lastResults.clear()
+        lastResults.putAll(loadedResults)
         dirty = false
     }
 
@@ -140,9 +169,28 @@ class MatchStore(
                 yaml["$base.reward"] = result.rewardState.name
                 yaml["$base.finished-at"] = result.finishedAtMillis
                 yaml["$base.elimination-order"] = result.eliminationOrder.map(UUID::toString)
+                yaml["$base.standings"] = result.standings.map(UUID::toString)
             }
             yaml["$path.pending-restore"] = snapshot.pendingRestore.map(UUID::toString)
             yaml["$path.confirmed-restore"] = snapshot.confirmedRestore.map(UUID::toString)
+        }
+        for ((regionId, result) in lastResults) {
+            val base = "results.$regionId"
+            yaml["$base.id"] = result.resultId.toString()
+            yaml["$base.match"] = result.matchId.toString()
+            yaml["$base.mode"] = result.modeType
+            yaml["$base.outcome"] = result.outcome.name
+            yaml["$base.winners"] = result.winnerIds.map(UUID::toString)
+            yaml["$base.winner-team"] = result.winnerTeamId
+            yaml["$base.reason"] = result.reasonKey
+            for ((key, value) in result.reasonArgs) {
+                yaml["$base.reason-args.$key"] = value
+            }
+            yaml["$base.forced-by"] = result.forcedBy
+            yaml["$base.reward"] = result.rewardState.name
+            yaml["$base.finished-at"] = result.finishedAtMillis
+            yaml["$base.elimination-order"] = result.eliminationOrder.map(UUID::toString)
+            yaml["$base.standings"] = result.standings.map(UUID::toString)
         }
         file.parentFile?.mkdirs()
         val temporary = File(file.parentFile, "${file.name}.tmp")
@@ -206,6 +254,7 @@ class MatchStore(
                     ?: RewardState.NONE,
                 finishedAtMillis = entry.getLong("finished-at"),
                 eliminationOrder = entry.getStringList("elimination-order").map(UUID::fromString),
+                standings = entry.getStringList("standings").map(UUID::fromString),
             )
         }
         val options = section.getConfigurationSection("options")
@@ -228,6 +277,30 @@ class MatchStore(
             confirmedRestore = section.getStringList("confirmed-restore").map(UUID::fromString).toSet(),
         )
     }
+
+    /** `results.<regionId>` 一条记录；与活动比赛里的 `result` 同形，只是 regionId 来自键。 */
+    private fun decodeResult(regionId: String, entry: ConfigurationSection): MatchResult = MatchResult(
+        resultId = UUID.fromString(entry.getString("id") ?: error("Result $regionId: id missing")),
+        matchId = UUID.fromString(entry.getString("match") ?: error("Result $regionId: match missing")),
+        regionId = regionId,
+        modeType = entry.getString("mode").orEmpty(),
+        outcome = MatchOutcome.valueOf(entry.getString("outcome") ?: error("Result $regionId: outcome missing")),
+        winnerIds = entry.getStringList("winners").map(UUID::fromString).toSet(),
+        winnerTeamId = entry.getString("winner-team"),
+        reasonKey = entry.getString("reason").orEmpty(),
+        reasonArgs = entry.getConfigurationSection("reason-args")
+            ?.getValues(false)
+            ?.mapValues { it.value?.toString().orEmpty() }
+            .orEmpty(),
+        forcedBy = entry.getString("forced-by"),
+        rewardState = entry.getString("reward")
+            ?.let { runCatching { RewardState.valueOf(it) }.getOrNull() }
+            ?: RewardState.NONE,
+        finishedAtMillis = entry.getLong("finished-at"),
+        eliminationOrder = entry.getStringList("elimination-order").map(UUID::fromString),
+        // 旧文件没有这一段，读出来是空列表：结果页少一行名次，不会读错胜负。
+        standings = entry.getStringList("standings").map(UUID::fromString),
+    )
 
     private companion object {
         const val MATCH_STORE_VERSION = 1

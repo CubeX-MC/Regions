@@ -11,6 +11,12 @@ modes:
   # 走进战斗场地时"这里可以报名"提示的冷却秒数。进入区域本身不等于报名（PLAN.md §5.3），
   # 所以提示会带冷却，避免每走一步刷屏；缺失时按 60 秒处理。
   entry-prompt-cooldown-seconds: 60
+  # 比赛进行中（开赛屏障→回合间隔）允许选手使用的指令。
+  # 默认只放行本插件的 /regions（退赛、查状态要用），其余一律拦下：
+  # /spawn、/home、/tp、/l edit 这类指令在 PVP 里就是最短的逃跑通道。
+  # 写根指令即可（不带 /）；`plugin:cmd` 形式会按去掉命名空间后的名字判定。
+  # 场地自己的 `commands` Flag 不受影响，依旧生效。
+  allowed-commands: []
 
 publishing:
   keep-revisions: 20

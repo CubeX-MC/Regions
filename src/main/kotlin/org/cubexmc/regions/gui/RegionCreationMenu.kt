@@ -8,6 +8,8 @@ import org.bukkit.persistence.PersistentDataType
 import org.cubexmc.regions.model.ModeConfig
 import org.cubexmc.regions.model.OwnerPolicy
 import org.cubexmc.regions.model.RegionDefinition
+import org.cubexmc.regions.service.VenueReadiness
+import org.cubexmc.regions.service.ReadinessField
 import org.cubexmc.regions.model.RegionSourceRef
 import org.cubexmc.regions.service.RegionTemplate
 import org.cubexmc.regions.service.templateDisplayName
@@ -770,32 +772,35 @@ internal enum class WizardField(val key: String) {
 
 /**
  * 当前玩法真正需要的必填项，以及还缺哪些（PLAN.md §5.2 阶段 3："只展示当前玩法必填项"）。
- * 纯函数：测得到、也不依赖 Bukkit。
+ *
+ * **判定本身住在 [VenueReadiness]**：创建向导、活动大厅和发布页问的是同一个问题
+ * "这场地现在能不能开一场"，答案分三处写就迟早各说各话。这里只做一件事——
+ * 把共享判定翻成向导自己的 [WizardField]，因为界面按类别分组渲染。
  */
 internal object WizardRequiredFields {
 
     data class Required(val fields: List<WizardField>, val missing: List<WizardField>)
 
     fun of(region: RegionDefinition): Required {
-        val values = region.mode?.values.orEmpty()
-        val fields = when (region.mode?.type?.lowercase(Locale.ROOT)) {
-            "dual_pvp" -> listOf(WizardField.RESPAWN, WizardField.SPAWNS, WizardField.KIT, WizardField.TIME)
-            "union_war" -> listOf(WizardField.RESPAWN, WizardField.SPAWNS, WizardField.TEAM_SPAWNS, WizardField.KIT, WizardField.ROSTER, WizardField.TIME)
-            "free_for_all" -> listOf(WizardField.RESPAWN, WizardField.SPAWNS, WizardField.KIT, WizardField.ROSTER, WizardField.TIME)
-            "hide_and_seek" -> listOf(WizardField.RESPAWN, WizardField.TIME)
-            "run_race", "boat_race", "horse_race" -> listOf(WizardField.TIME)
+        val required = VenueReadiness.requiredFields(region)
+        val fields = required.mapNotNull { toWizardField(it.field) }
+        val missing = required.filterNot { it.filled }.mapNotNull { toWizardField(it.field) }
+        // 时限与人数在向导里只是"要看一眼"的项,永远不算缺失,所以不进 VenueReadiness。
+        val extras = when (region.mode?.type?.lowercase(Locale.ROOT)) {
+            "dual_pvp", "hide_and_seek", "run_race", "boat_race", "horse_race" -> listOf(WizardField.TIME)
+            "union_war", "free_for_all" -> listOf(WizardField.ROSTER, WizardField.TIME)
             else -> emptyList()
         }
-        val missing = fields.filter { field ->
-            when (field) {
-                WizardField.RESPAWN -> values["respawn"].isNullOrBlank() && values["outside"].isNullOrBlank()
-                WizardField.SPAWNS -> org.cubexmc.regions.match.MatchSpawns.parseList(values["spawn-points"]).isEmpty()
-                WizardField.TEAM_SPAWNS -> org.cubexmc.regions.match.MatchSpawns.parseList(values["spawn-points-b"]).isEmpty()
-                WizardField.KIT -> values["kit"].isNullOrBlank() && values["armor"].isNullOrBlank()
-                WizardField.ROSTER -> false
-                WizardField.TIME -> false
-            }
-        }
-        return Required(fields, missing)
+        return Required(fields + extras, missing)
+    }
+
+    private fun toWizardField(field: ReadinessField): WizardField? = when (field) {
+        ReadinessField.RESPAWN -> WizardField.RESPAWN
+        ReadinessField.SPAWNS -> WizardField.SPAWNS
+        ReadinessField.TEAM_SPAWNS -> WizardField.TEAM_SPAWNS
+        ReadinessField.KIT -> WizardField.KIT
+        // 竞速的起终点在向导里由专门的按钮引导,不走"必填项清单"这条线。
+        ReadinessField.START, ReadinessField.FINISH -> null
     }
 }
+

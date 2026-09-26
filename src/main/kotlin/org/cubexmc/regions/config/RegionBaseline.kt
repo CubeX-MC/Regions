@@ -22,8 +22,8 @@ object RegionBaseline {
         BaselineFile("config.yml", "config-version", 4),
         BaselineFile("regions.yml", "regions-version", 4),
         BaselineFile("templates.yml", "templates-version", 2),
-        BaselineFile("lang/zh_CN.yml", "lang-version", 8),
-        BaselineFile("lang/en_US.yml", "lang-version", 8),
+        BaselineFile("lang/zh_CN.yml", "lang-version", 11),
+        BaselineFile("lang/en_US.yml", "lang-version", 11),
     )
 
     /**
@@ -47,6 +47,9 @@ object RegionBaseline {
                 val locale = baseline.path.substringAfterLast('/').removeSuffix(".yml")
                 plan.addStep(LangV6ToV7Step(locale))
                 plan.addStep(LangV7ToV8Step(locale))
+                plan.addStep(LangV8ToV9Step(locale))
+                plan.addStep(LangV9ToV10Step(locale))
+                plan.addStep(LangV10ToV11Step(locale))
             }
             if (baseline.path == "templates.yml") {
                 plan.addStep(TemplatesV1ToV2Step())

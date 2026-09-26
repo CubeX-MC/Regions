@@ -1,5 +1,14 @@
 # Regions 发布检查单
 
+## 2026-09-22 候选验证
+
+- [x] 376 项测试，无失败、错误或跳过；`:Regions:build` 与 `:Regions:jarGate` 通过。
+- [x] `:Regions:shadowJar --rerun-tasks` 强制重新打包通过。
+- [x] 隔离 Paper 加载、语言 v8→v11、八种玩法注册、旧场地读取、校验和重载。
+- [ ] 真实 Lands/Folia、多人对战、实际装备与资金故障矩阵；下方历史待办仍有效。
+
+候选包 hash 与实服记录见 [本轮证据](completion-2026-09-22.md)。
+
 ## 自动门禁
 
 - [ ] `:Regions:test` 全部通过，无 skipped。

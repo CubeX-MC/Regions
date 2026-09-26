@@ -1,4 +1,4 @@
-lang-version: 8
+lang-version: 11
 
 prefix: "<#69DB7C>[Regions] "
 help: |
@@ -7,8 +7,8 @@ help: |
   <#69DB7C>/regions create \<id> \<名称> --land \<领地> [area] <#CFD8DC>- 在自己的 Lands 区域创建场地
   <#69DB7C>/regions bind \<id> cuboid|lands ... <#CFD8DC>- 绑定区域来源
   <#69DB7C>/regions mode set \<id> dual_pvp|union_war|run_race|boat_race|horse_race|hide_and_seek ... <#CFD8DC>- 设置玩法
-  <#69DB7C>/regions game \<id> join|leave|ready|unready|spectate|status|result <#CFD8DC>- 报名、退出、准备、观战或查看比赛
-  <#69DB7C>/regions game \<id> teams \<甲方国家> \<乙方国家> <#CFD8DC>- 场地主指定工会战本场双方
+  <#69DB7C>/regions game [id] join|leave|ready|unready|spectate|status|result <#CFD8DC>- 报名、退出、准备、观战或查看（人在场地里时可不写 id）
+  <#69DB7C>/regions game \<id> teams [编号|名字|me] [编号|名字] <#CFD8DC>- 指定工会战双方（不带参数列候选；me = 你当前编辑领地的国家；只写对手则甲方默认是你）
   <#69DB7C>/regions game \<id> start|end <#CFD8DC>- 裁判发令或强制结束比赛
   <#69DB7C>/regions language \<zh_CN|en_US|auto> <#CFD8DC>- 选择自己的显示语言（仅 locale-mode: player 时生效）
   <#69DB7C>/regions flag set \<id> \<flag> \<值> <#CFD8DC>- 设置规则
@@ -40,6 +40,7 @@ authority-ownership-changed: "<#E63946>区域主人已发生变化；场地必�
 player-only: "<#E63946>该命令只能由玩家执行。"
 invalid-usage: "<#FFE066>用法: <usage>"
 not-found: "<#E63946>找不到区域: <id>"
+region-ambiguous: "<red><yellow><input><red> 匹配到多个场地：<white><names><red>。请写得更完整，或用 <yellow>/regions list<red> 里的编号。"
 player-not-found: "<#E63946>找不到在线玩家: <player>"
 list-empty: "<#CFD8DC>还没有配置任何区域。"
 list-header: "<#69DB7C>已配置区域 (<count>):"
@@ -58,6 +59,7 @@ doctor-line: "<#CFD8DC>- <message>"
 
 command:
   flag-denied: "<red>这个区域不允许使用 /<command>。"
+  match-denied: "<red>比赛进行中不能使用 <yellow>/<command><red>。退赛请用 <yellow>/regions game leave<red>。"
   region-created: "<green>已创建区域草稿 <id>，并绑定到 <source>。校验后使用 /regions publish <id> 发布。"
   region-removed: "<green>已删除区域 <id>。"
   region-enabled: "<green>区域 <id> 已启用。"
@@ -105,9 +107,18 @@ command:
   game-teams: "<yellow><id> 当前对阵: <gray>甲方 <a> <yellow>/ <gray>乙方 <b>"
   game-teams-set: "<green>已把 <id> 的本场对阵设为 <a> 对 <b>。"
   game-teams-failed: "<red>现在不能为 <id> 指定对阵（不是工会战、已经开局或已有报名者）。"
+  game-teams-candidates: "<gray>可选工会（编号、名字或名字前缀都行）："
+  game-teams-candidate: "<yellow><index>. <white><name> <dark_gray>(<id>)"
+  game-teams-candidate-mine: "<yellow><index>. <white><name> <dark_gray>(<id>) <green>← 你当前编辑的领地"
+  game-teams-none: "<red>当前服务器上没有可用的工会（Lands 未安装、未启用，或还没有任何 Nation）。"
+  game-teams-unknown: "<red>找不到工会 <yellow><input><red>。"
+  game-teams-ambiguous: "<red><yellow><input><red> 同时匹配到：<white><names><red>。请写得更完整，或直接用编号。"
+  game-teams-same: "<red>两边不能都是 <yellow><name><red>。"
+  game-teams-no-edit-land: "<red>没能从你当前的领地推出国家：先用 <yellow>/l edit <领地><red> 选一个属于某个国家的领地，或直接写国家编号/名字。"
   game-result: "<yellow><id> 结果: <gray><outcome> <dark_gray>(<reason>) <gray>胜者: <winner> <gray>奖励: <reward>"
 
 game:
+  region-required: "<red>你现在不在任何比赛场地里，请写明场地：<yellow><usage>"
   combat:
     restoring: "<yellow><name> 正在恢复上一局，请稍后重新进入。"
     in-progress: "<yellow><name> 的比赛已经开始，你不会加入当前局。"
@@ -117,6 +128,7 @@ game:
     started: "<red>比赛开始！"
     ended: "<yellow>比赛结束。"
   match:
+    gear-transfer-denied: "<#E63946>临时装备托管期间不能打开其他容器；比赛结束并归还装备后即可使用。"
     finishing: "<yellow>结算中：还有 <pending> 名玩家等待恢复装备（奖励：<reward>）。"
     enter-prompt: "<yellow>这里是 <name> 的比赛场地。输入 <green>/regions game <id> join <yellow>报名；走进场地本身不算报名。"
     rejoin: "<green>你已回到 <name>（<state>）。"
@@ -129,6 +141,7 @@ game:
       not-a-match: "<red>这个场地不是对战类玩法。"
       in-progress: "<yellow>比赛已经开始，请等待下一场或使用观战。"
       already-joined: "<yellow>你已经在这场比赛的名单里。"
+      other-match: "<#E63946>你仍在另一场比赛或观战名单中，请先退出或等本局结束。"
       restoring: "<yellow>你的装备还在上一局的恢复队列里，恢复完成后才能报名新的一局。"
       full: "<red>这场比赛人数已满。"
       team-full: "<red>你要加入的国家已经满员。"
@@ -144,6 +157,7 @@ game:
     unready: "<yellow><player> 取消了准备 (<current> 人已准备)。"
     unready.not-possible: "<yellow>当前不能取消准备。"
     leave.not-joined: "<yellow>你不在 <id> 的比赛名单里。"
+    start.not-supported: "<yellow>这个玩法在全员准备后自动开赛，没有单独的发令步骤。"
     spectate:
       not-a-match: "<red>这个场地不是对战类玩法。"
       no-match: "<yellow>这里现在没有可观看的比赛。"
@@ -197,12 +211,18 @@ game:
       prepare-failed: "装备或传送失败"
       roster-changed: "阵容变化"
       prepare-timeout: "开赛准备超时"
+      all-finished: "全员完赛"
+      no-finisher: "时间到，无人完赛"
+      all-found: "隐藏者全部被找到"
+      seekers-gone: "寻找者全部离场"
+      hiders-survived: "隐藏者坚持到结束"
   race:
     restoring: "<yellow><name> 正在结束上一局，请稍后重新进入。"
     in-progress: "<yellow><name> 的比赛已经开始，你会在下一局加入。"
     full: "<red><name> 当前参赛人数已满。"
     joined: "<green>你已进入 <name>。输入 <yellow>/regions game <id> ready <green>准备比赛。"
     left: "<yellow><player> 离开比赛。"
+    removed: "<yellow>你已退出本场比赛，重生后会恢复入场前状态。"
     not-inside: "<red>你不在这个比赛场地内。"
     already-started: "<yellow>比赛已经开始。"
     start-required: "<yellow>请先到起点附近再准备。"
@@ -318,6 +338,13 @@ gui:
     found: "<yellow>发现 <count> 个配置问题，详情见下方。"
     line: "<gray><id>: <severity> <message>"
   detail:
+    readiness:
+      ready:
+        name: "<green>可以开赛"
+        lore: ["<gray>配置、依赖与场地状态都就绪。"]
+      blocked:
+        name: "<red>还开不了 <gray>(<count> 项)"
+        lore: ["<gray>下面是还缺的："]
     title: "<dark_green>Region: <id>"
     source:
       name: "<aqua>区域来源"
@@ -406,6 +433,7 @@ gui:
     ok: "<green>已删除区域 <id>。"
     failed: "<red>删除失败: <reason>"
   create:
+    bad-name: "<red>名称不能为空，请重新输入。"
     bad-id: "<red>区域 ID 格式不正确。"
     exists: "<red>区域 <id> 已存在。"
     lands-unavailable: "<red>Lands 当前不可用，无法读取你拥有的 area。"
@@ -434,7 +462,25 @@ gui:
     cuboid-format: "<red>格式错误，需要 world,minX,minY,minZ,maxX,maxY,maxZ。"
     name-blank: "<red>名称不能为空。"
   mode:
-    title: "<dark_green>玩法: <id>"
+    title:
+      basic: "<dark_green>玩法 · 基础: <id>"
+      spawns: "<dark_green>玩法 · 点位: <id>"
+      format: "<dark_green>玩法 · 赛制: <id>"
+    tab:
+      basic:
+        name: "<yellow>基础参数"
+        lore: ["<gray>人数、确认、装备预设。"]
+      spawns:
+        name: "<yellow>点位"
+        lore: ["<gray>出生点、复活点、起终点与检查点。"]
+      format:
+        name: "<yellow>赛制"
+        lore: ["<gray>时限、回合、开赛方式与对阵。"]
+    spawn-list:
+      name: "<yellow>出生点清单 <gray>(<side>)"
+      lore: ["<gray>已设 <count> 个（乙方 <count_b> 个）。", "<gray>点进去可以逐个查看和删除。"]
+      one-side: "一组"
+      two-sides: "甲/乙两组"
     current: "<green>当前模式"
     switch: "<gray>点击切换到此模式"
     key-value-required: "<red>请输入 key=value。"
@@ -476,9 +522,9 @@ gui:
         lore:
           - "<gray>每人一条命，最后存活者获胜；同批淘汰与超时存活为并列。"
           - "<gray>可设置最低/最高人数、时限与出生点；本玩法不支持奖励来源。"
-        lore:
-          - "<gray>藏猫猫小游戏，自动分配寻找者和隐藏者。"
-          - "<gray>寻找者攻击隐藏者即可找到对方，不造成伤害。"
+    teams:
+      name: "<yellow>本场对阵: <a> <gray>vs <b>"
+      lore: ["<gray>点击用名字选双方，不用输 ID。"]
     min-players:
       name: "<yellow>最小人数: <value>"
       lore: ["<gray>左键 +1，右键 -1。"]
@@ -726,6 +772,17 @@ gui:
     overlap-line: "<gray><id> · priority=<priority> · <source>"
     ok: "<green>区域 <id> 的草稿已发布。"
     failed: "<red>发布失败: <reason>"
+    issue-name: "<severity>项"
+    fix-hint:
+      goto: "<yellow>点击前往<target>设置处理，模式页可返回发布页"
+      none:
+        - "<gray>此项没有页面内修复入口，请按说明或联系管理员。"
+    fix-target:
+      mode: "玩法"
+      rules: "场地规则"
+      effects: "临时效果"
+      triggers: "触发动作"
+      source: "来源"
   history:
     header: "<gold><id> 的已发布版本 (<count>)"
     empty: "<gray>暂无已发布历史。"
@@ -749,19 +806,23 @@ gui:
         - "<gray>页面 <page>/<pages>"
     owner-changed: "<yellow>该 area 的主人身份可能刚刚发生变化，列表已刷新。"
   lobby:
+    language:
+      name: "<yellow>显示语言: <current>"
+      lore: ["<gray>点击切换到 <next>。", "<gray>只影响你自己看到的文字。"]
+      zh_CN: "中文"
+      en_US: "English"
+      auto: "自动（跟随客户端）"
+    my-match:
+      name: "<green>我的比赛: <name>"
+      lore: ["<gray>点击回到你正在参与的那场。"]
+    reason:
+      joinable: ["<green>点击查看并报名。"]
     title: "<dark_green>活动大厅 <gray><page>/<pages>"
     entry:
       name: "<aqua><name>"
       lore:
         - "<gray>玩法：<mode>"
         - "<gray>状态：<status>"
-    reason:
-      joinable: "<green>可报名：走入场地即可加入"
-      running: "<yellow>比赛进行中，等待下一场"
-      restoring: "<yellow>正在恢复上一局，暂不能加入"
-      full: "<red>人数已满，稍后再来"
-      source-unavailable: "<red>缺少依赖：<source>"
-      unions-unavailable: "<red>需要工会数据来源（Lands）"
     empty:
       name: "<red>暂无可参与的活动场地"
       lore:
@@ -864,17 +925,56 @@ gui:
       free_for_all:
         summary:
           - "<gray>每人一条命，最后存活者获胜（4-16 人，单命淘汰）。"
-    issue-name: "<severity>项"
-    fix-hint:
-      goto: "<yellow>点击前往<target>设置处理，模式页可返回发布页"
-      none:
-        - "<gray>此项没有页面内修复入口，请按说明或联系管理员。"
-    fix-target:
-      mode: "玩法"
-      rules: "场地规则"
-      effects: "临时效果"
-      triggers: "触发动作"
-      source: "来源"
+  spawns:
+    title: "<dark_green>出生点: <name>"
+    entry:
+      a:
+        name: "<red>出生点 <index>"
+        lore: ["<gray><location>", "<red>点击删除。"]
+      b:
+        name: "<blue>乙方出生点 <index>"
+        lore: ["<gray><location>", "<red>点击删除。"]
+    empty:
+      name: "<gray>还没有出生点"
+      lore: ["<gray>站到想要的位置，点下方的“在这里添加”。"]
+    side:
+      a:
+        name: "<red>甲方"
+        lore: ["<gray>查看甲方的出生点。"]
+      b:
+        name: "<blue>乙方"
+        lore: ["<gray>查看乙方的出生点。"]
+    add:
+      name: "<green>在这里添加"
+      lore: ["<gray><location>"]
+    clear:
+      name: "<red>清空本组"
+      lore: ["<gray>当前 <count> 个点。"]
+  teams:
+    title: "<dark_green>对阵: <name>"
+    summary:
+      name: "<yellow>当前对阵"
+      lore: ["<gray>甲方: <a>", "<gray>乙方: <b>", "<gray>点国家选定；再点一次取消。"]
+    entry:
+      free:
+        name: "<white><name>"
+        lore: ["<gray>点击选为参战方。"]
+      mine:
+        name: "<green><name>"
+        lore: ["<gray>你当前编辑领地所属的国家。", "<gray>点击选为参战方。"]
+      a:
+        name: "<red>甲方: <name>"
+        lore: ["<gray>再点一次取消。"]
+      b:
+        name: "<blue>乙方: <name>"
+        lore: ["<gray>再点一次取消。"]
+    empty:
+      name: "<gray>没有可选的国家"
+      lore: ["<gray>Lands 未安装/未启用，或服务器上还没有 Nation。"]
+    clear:
+      name: "<red>清空对阵"
+      lore: ["<gray>两边都取消选择。"]
+    rejected: "<red>现在不能改对阵（已开局或已有报名者）。"
   game:
     title: "<dark_green><name> · 比赛报名"
     rules:
@@ -983,6 +1083,25 @@ gui:
     horse: "马"
     minecart: "矿车"
     ignore: "不检查"
+readiness:
+  missing-respawn: "还没设出场/复活点"
+  missing-spawns: "还没设出生点"
+  missing-team-spawns: "还没设乙方出生点"
+  missing-kit: "还没设装备预设"
+  missing-start: "还没设起点"
+  missing-finish: "还没设终点"
+  invalid: "配置校验未通过（<code>）"
+  source-unavailable: "来源不可用：<source>"
+  unions-unavailable: "工会来源不可用"
+  disabled: "场地已停用"
+  archived: "场地已归档"
+  frozen: "场地已被冻结"
+  unpublished: "还没发布"
+  restoring: "上一局正在恢复"
+  running: "正在进行中"
+  full: "人数已满（<max>）"
+  ready: "可以开赛"
+
 labels:
   common:
     "on": "<green>开启"

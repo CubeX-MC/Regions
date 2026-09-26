@@ -1,4 +1,4 @@
-lang-version: 8
+lang-version: 11
 
 prefix: "<#69DB7C>[Regions] "
 help: |
@@ -7,8 +7,8 @@ help: |
   <#69DB7C>/regions create \<id> \<name> --land \<land> [area] <#CFD8DC>- Create a venue on your own Lands area
   <#69DB7C>/regions bind \<id> cuboid|lands ... <#CFD8DC>- Bind a region source
   <#69DB7C>/regions mode set \<id> dual_pvp|union_war|run_race|boat_race|horse_race|hide_and_seek ... <#CFD8DC>- Set gameplay mode
-  <#69DB7C>/regions game \<id> join|leave|ready|unready|spectate|status|result <#CFD8DC>- Sign up, leave, ready, spectate, or inspect a match
-  <#69DB7C>/regions game \<id> teams \<nationA> \<nationB> <#CFD8DC>- Venue owner picks the two nations for a nation battle
+  <#69DB7C>/regions game [id] join|leave|ready|unready|spectate|status|result <#CFD8DC>- Sign up, leave, ready, spectate, or inspect (the id is optional while you are in a venue)
+  <#69DB7C>/regions game \<id> teams [number|name|me] [number|name] <#CFD8DC>- Pick the two nations (no arguments lists them; me = the nation of the land you are editing; one argument means you vs them)
   <#69DB7C>/regions game \<id> start|end <#CFD8DC>- Judge-start or force-end a match
   <#69DB7C>/regions language \<zh_CN|en_US|auto> <#CFD8DC>- Pick your own display language (needs locale-mode: player)
   <#69DB7C>/regions flag set \<id> \<flag> \<value> <#CFD8DC>- Set a rule flag
@@ -40,6 +40,7 @@ authority-ownership-changed: "<#E63946>The area owner changed; the venue must be
 player-only: "<#E63946>This command can only be run by a player."
 invalid-usage: "<#FFE066>Usage: <usage>"
 not-found: "<#E63946>Region not found: <id>"
+region-ambiguous: "<red><yellow><input><red> matches several venues: <white><names><red>. Be more specific, or use the number from <yellow>/regions list<red>."
 player-not-found: "<#E63946>Online player not found: <player>"
 list-empty: "<#CFD8DC>No regions configured yet."
 list-header: "<#69DB7C>Configured regions (<count>):"
@@ -58,6 +59,7 @@ doctor-line: "<#CFD8DC>- <message>"
 
 command:
   flag-denied: "<red>This area does not allow /<command>."
+  match-denied: "<red>/<command> is not allowed during a match. Use <yellow>/regions game leave<red> to drop out."
   region-created: "<green>Created draft region <id> bound to <source>. Run /regions publish <id> once it validates."
   region-removed: "<green>Removed region <id>."
   region-enabled: "<green>Region <id> is now enabled."
@@ -105,9 +107,18 @@ command:
   game-teams: "<yellow><id> current pairing: <gray>A <a> <yellow>/ <gray>B <b>"
   game-teams-set: "<green>Set the pairing for <id> to <a> vs <b>."
   game-teams-failed: "<red>Cannot set the pairing for <id> right now (not a nation battle, already started, or players have signed up)."
+  game-teams-candidates: "<gray>Available nations (use the number, the name, or a name prefix):"
+  game-teams-candidate: "<yellow><index>. <white><name> <dark_gray>(<id>)"
+  game-teams-candidate-mine: "<yellow><index>. <white><name> <dark_gray>(<id>) <green>← the land you are editing"
+  game-teams-none: "<red>No nations are available on this server (Lands missing, disabled, or no nation exists yet)."
+  game-teams-unknown: "<red>No nation matches <yellow><input><red>."
+  game-teams-ambiguous: "<red><yellow><input><red> matches several: <white><names><red>. Be more specific or use the number."
+  game-teams-same: "<red>Both sides cannot be <yellow><name><red>."
+  game-teams-no-edit-land: "<red>Could not derive a nation from the land you are editing: run <yellow>/l edit <land><red> on a land that belongs to a nation, or pass the number/name instead."
   game-result: "<yellow><id> result: <gray><outcome> <dark_gray>(<reason>) <gray>winner: <winner> <gray>reward: <reward>"
 
 game:
+  region-required: "<red>You are not in a venue right now, so name one: <yellow><usage>"
   combat:
     restoring: "<yellow><name> is still restoring the previous match; come back in a moment."
     in-progress: "<yellow><name> has already started; you will not join the current match."
@@ -117,6 +128,7 @@ game:
     started: "<red>Fight!"
     ended: "<yellow>The match has ended."
   match:
+    gear-transfer-denied: "<#E63946>You cannot open other containers while temporary gear is held. Try again after your gear is returned."
     finishing: "<yellow>Settling up: <pending> player(s) still need their gear restored (reward: <reward>)."
     enter-prompt: "<yellow>This is the venue for <name>. Run <green>/regions game <id> join <yellow>to sign up; walking in does not enter you."
     rejoin: "<green>You are back at <name> (<state>)."
@@ -129,6 +141,7 @@ game:
       not-a-match: "<red>That venue is not a combat mode."
       in-progress: "<yellow>The match has started; wait for the next one or spectate."
       already-joined: "<yellow>You are already on this match's roster."
+      other-match: "<#E63946>You are in another match or spectator roster. Leave it or wait for that match to end."
       restoring: "<yellow>Your gear is still queued for recovery from an earlier match; sign up again once that finishes."
       full: "<red>This match is full."
       team-full: "<red>The nation you picked already has a full roster."
@@ -144,6 +157,7 @@ game:
     unready: "<yellow><player> is no longer ready (<current> ready)."
     unready.not-possible: "<yellow>You cannot unready right now."
     leave.not-joined: "<yellow>You are not on the roster for <id>."
+    start.not-supported: "<yellow>This mode starts once everyone is ready; there is no separate start command."
     spectate:
       not-a-match: "<red>That venue is not a combat mode."
       no-match: "<yellow>There is no match to watch here right now."
@@ -197,12 +211,18 @@ game:
       prepare-failed: "gear or teleport failed"
       roster-changed: "the roster changed"
       prepare-timeout: "the start sequence timed out"
+      all-finished: "everyone finished"
+      no-finisher: "time ran out with nobody finishing"
+      all-found: "every hider was found"
+      seekers-gone: "every seeker left"
+      hiders-survived: "the hiders lasted to the end"
   race:
     restoring: "<yellow><name> is still finishing the previous race; come back in a moment."
     in-progress: "<yellow><name> has already started; you will join the next race."
     full: "<red><name> is full."
     joined: "<green>You entered <name>. Run <yellow>/regions game <id> ready <green>to get set."
     left: "<yellow><player> left the race."
+    removed: "<yellow>You are out of this race; your pre-race state is restored when you respawn."
     not-inside: "<red>You are not inside this race venue."
     already-started: "<yellow>The race has already started."
     start-required: "<yellow>Move to the start line before readying up."
@@ -318,6 +338,13 @@ gui:
     found: "<yellow>Found <count> configuration problem(s); details below."
     line: "<gray><id>: <severity> <message>"
   detail:
+    readiness:
+      ready:
+        name: "<green>Ready to start"
+        lore: ["<gray>Configuration, dependencies and venue state are all fine."]
+      blocked:
+        name: "<red>Not ready <gray>(<count>)"
+        lore: ["<gray>Still missing:"]
     title: "<dark_green>Region: <id>"
     source:
       name: "<aqua>Region source"
@@ -406,6 +433,7 @@ gui:
     ok: "<green>Deleted region <id>."
     failed: "<red>Deletion failed: <reason>"
   create:
+    bad-name: "<red>The name cannot be empty; type it again."
     bad-id: "<red>That region ID is not valid."
     exists: "<red>Region <id> already exists."
     lands-unavailable: "<red>Lands is unavailable, so your owned areas cannot be listed."
@@ -434,7 +462,25 @@ gui:
     cuboid-format: "<red>Invalid format; expected world,minX,minY,minZ,maxX,maxY,maxZ."
     name-blank: "<red>The name cannot be empty."
   mode:
-    title: "<dark_green>Mode: <id>"
+    title:
+      basic: "<dark_green>Mode · Basics: <id>"
+      spawns: "<dark_green>Mode · Spawns: <id>"
+      format: "<dark_green>Mode · Format: <id>"
+    tab:
+      basic:
+        name: "<yellow>Basics"
+        lore: ["<gray>Player counts, confirmation, gear presets."]
+      spawns:
+        name: "<yellow>Spawns"
+        lore: ["<gray>Spawn points, respawn point, start/finish and checkpoints."]
+      format:
+        name: "<yellow>Format"
+        lore: ["<gray>Time limits, rounds, start rules and pairing."]
+    spawn-list:
+      name: "<yellow>Spawn points <gray>(<side>)"
+      lore: ["<gray><count> set (side B: <count_b>).", "<gray>Open to inspect and delete them one by one."]
+      one-side: "one set"
+      two-sides: "A/B"
     current: "<green>Current mode"
     switch: "<gray>Click to switch to this mode"
     key-value-required: "<red>Enter key=value."
@@ -476,9 +522,9 @@ gui:
         lore:
           - "<gray>One life each; the last player standing wins, ties are shared."
           - "<gray>Configurable player range, time limit and spawn points; no reward source."
-        lore:
-          - "<gray>Hide and seek with automatic role assignment."
-          - "<gray>Seekers tag hiders by attacking them; no damage is dealt."
+    teams:
+      name: "<yellow>Pairing: <a> <gray>vs <b>"
+      lore: ["<gray>Click to pick both sides by name; no IDs needed."]
     min-players:
       name: "<yellow>Minimum players: <value>"
       lore: ["<gray>Left click +1, right click -1."]
@@ -725,6 +771,17 @@ gui:
     overlap-line: "<gray><id> · priority=<priority> · <source>"
     ok: "<green>The draft of region <id> has been published."
     failed: "<red>Publish failed: <reason>"
+    issue-name: "<severity> item"
+    fix-hint:
+      goto: "<yellow>Click to open <target> settings; the mode page returns here"
+      none:
+        - "<gray>No in-page fix for this one; follow the description or ask an admin."
+    fix-target:
+      mode: "game mode"
+      rules: "rules"
+      effects: "effects"
+      triggers: "triggers"
+      source: "source"
   history:
     header: "<gold>Published revisions of <id> (<count>)"
     empty: "<gray>No published history yet."
@@ -748,19 +805,23 @@ gui:
         - "<gray>Page <page>/<pages>"
     owner-changed: "<yellow>Ownership of that area may have just changed; the list was refreshed."
   lobby:
+    language:
+      name: "<yellow>Language: <current>"
+      lore: ["<gray>Click to switch to <next>.", "<gray>Only affects what you see."]
+      zh_CN: "中文"
+      en_US: "English"
+      auto: "Auto (follow client)"
+    my-match:
+      name: "<green>My match: <name>"
+      lore: ["<gray>Click to jump back to the match you are in."]
+    reason:
+      joinable: ["<green>Click to inspect and sign up."]
     title: "<dark_green>Activity lobby <gray><page>/<pages>"
     entry:
       name: "<aqua><name>"
       lore:
         - "<gray>Mode: <mode>"
         - "<gray>Status: <status>"
-    reason:
-      joinable: "<green>Joinable: walk into the venue to sign up"
-      running: "<yellow>Match running; wait for the next one"
-      restoring: "<yellow>Restoring the previous match; join later"
-      full: "<red>Full; come back later"
-      source-unavailable: "<red>Missing dependency: <source>"
-      unions-unavailable: "<red>Needs a union data source (Lands)"
     empty:
       name: "<red>No joinable venues yet"
       lore:
@@ -863,17 +924,56 @@ gui:
       hide_and_seek:
         summary:
           - "<gray>Seekers hunt hiders; hiders win by surviving the round."
-    issue-name: "<severity> item"
-    fix-hint:
-      goto: "<yellow>Click to open <target> settings; the mode page returns here"
-      none:
-        - "<gray>No in-page fix for this one; follow the description or ask an admin."
-    fix-target:
-      mode: "game mode"
-      rules: "rules"
-      effects: "effects"
-      triggers: "triggers"
-      source: "source"
+  spawns:
+    title: "<dark_green>Spawn points: <name>"
+    entry:
+      a:
+        name: "<red>Spawn <index>"
+        lore: ["<gray><location>", "<red>Click to delete."]
+      b:
+        name: "<blue>Side B spawn <index>"
+        lore: ["<gray><location>", "<red>Click to delete."]
+    empty:
+      name: "<gray>No spawn points yet"
+      lore: ["<gray>Stand where you want it and click “Add here” below."]
+    side:
+      a:
+        name: "<red>Side A"
+        lore: ["<gray>Show side A spawn points."]
+      b:
+        name: "<blue>Side B"
+        lore: ["<gray>Show side B spawn points."]
+    add:
+      name: "<green>Add here"
+      lore: ["<gray><location>"]
+    clear:
+      name: "<red>Clear this set"
+      lore: ["<gray><count> point(s) right now."]
+  teams:
+    title: "<dark_green>Pairing: <name>"
+    summary:
+      name: "<yellow>Current pairing"
+      lore: ["<gray>Side A: <a>", "<gray>Side B: <b>", "<gray>Click a nation to pick it; click again to clear."]
+    entry:
+      free:
+        name: "<white><name>"
+        lore: ["<gray>Click to set as a side."]
+      mine:
+        name: "<green><name>"
+        lore: ["<gray>The nation of the land you are editing.", "<gray>Click to set as a side."]
+      a:
+        name: "<red>Side A: <name>"
+        lore: ["<gray>Click again to clear."]
+      b:
+        name: "<blue>Side B: <name>"
+        lore: ["<gray>Click again to clear."]
+    empty:
+      name: "<gray>No nations available"
+      lore: ["<gray>Lands is missing or disabled, or no nation exists yet."]
+    clear:
+      name: "<red>Clear pairing"
+      lore: ["<gray>Unset both sides."]
+    rejected: "<red>The pairing cannot be changed now (match started or players already signed up)."
   game:
     title: "<dark_green><name> · Match signup"
     rules:
@@ -982,6 +1082,25 @@ gui:
     horse: "horse"
     minecart: "minecart"
     ignore: "ignored"
+readiness:
+  missing-respawn: "No exit/respawn point yet"
+  missing-spawns: "No spawn points yet"
+  missing-team-spawns: "Side B has no spawn points"
+  missing-kit: "No gear preset yet"
+  missing-start: "No start point yet"
+  missing-finish: "No finish point yet"
+  invalid: "Configuration is invalid (<code>)"
+  source-unavailable: "Source unavailable: <source>"
+  unions-unavailable: "Nation source unavailable"
+  disabled: "Venue is disabled"
+  archived: "Venue is archived"
+  frozen: "Venue is frozen"
+  unpublished: "Not published yet"
+  restoring: "The previous match is still being restored"
+  running: "A match is in progress"
+  full: "Full (<max>)"
+  ready: "Ready to start"
+
 labels:
   common:
     "on": "<green>On"

@@ -82,6 +82,14 @@ class GuiTextLocaleTest {
     }
 
     @Test
+    fun `validation translates legacy field arguments without a field path`() {
+        val args = mapOf("field" to "respawn")
+        assertTrue(lang.issueLine("location-required", args).contains("返回点"))
+        assertTrue(lang.issueLineFor(player("zh_CN"), "location-required", args).contains("返回点"))
+        assertTrue(lang.issueLineFor(player("en_US"), "location-required", args).contains("Respawn point"))
+    }
+
+    @Test
     fun `lore, components and boolean labels follow the viewer too`() {
         val chinese = player("zh_CN")
         val english = player("en_US")

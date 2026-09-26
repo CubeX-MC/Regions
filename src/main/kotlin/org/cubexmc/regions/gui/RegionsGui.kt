@@ -47,8 +47,14 @@ class RegionsGui(internal val plugin: RegionsPlugin) : Listener {
     internal val gameLobby = GameLobbyMenu(this)
     val wizardDrafts = WizardDrafts()
     private val modeMenu = RegionModeMenu(this)
+    internal val unionPicker = UnionPickerMenu(this)
+    internal val spawnList = SpawnListMenu(this)
     private val rules = RegionRuleMenu(this)
     internal val publish = RegionPublishMenu(this)
+
+    /** 对阵页返回玩法页用；modeMenu 本身保持 private。 */
+    internal fun openModePage(player: Player, regionId: String, tab: ModeTab = ModeTab.BASIC) =
+        modeMenu.open(player, regionId, tab = tab)
     internal val creation = RegionCreationMenu(this)
 
 /**
@@ -76,7 +82,9 @@ class RegionsGui(internal val plugin: RegionsPlugin) : Listener {
                     View.DETAIL -> regionId?.let { overview.openDetail(player, it) }
                     View.DETAIL_ADVANCED -> regionId?.let { overview.openDetailAdvanced(player, it) }
                     View.SOURCE -> regionId?.let { overview.openSource(player, it) }
-                    View.MODE -> regionId?.let { modeMenu.open(player, it, holder.returnToPublish) }
+                    View.MODE -> regionId?.let { modeMenu.open(player, it, holder.returnToPublish, holder.modeTab) }
+                    View.UNION_PICKER -> regionId?.let { unionPicker.open(player, it, holder.lobbyPage) }
+                    View.SPAWN_LIST -> regionId?.let { spawnList.open(player, it, holder.spawnTeamB, holder.lobbyPage) }
                     View.FLAGS -> regionId?.let { rules.openFlags(player, it, holder.returnToPublish) }
                     View.EFFECTS -> regionId?.let { rules.openEffects(player, it, holder.returnToPublish) }
                     View.TRIGGERS -> regionId?.let { rules.openTriggers(player, it, holder.returnToPublish) }
@@ -158,6 +166,8 @@ class RegionsGui(internal val plugin: RegionsPlugin) : Listener {
             View.DETAIL_ADVANCED -> overview.clickDetailAdvanced(player, holder.regionId ?: return, slot)
             View.SOURCE -> overview.clickSource(player, holder.regionId ?: return, slot, rightClick)
             View.MODE -> modeMenu.click(player, holder, slot, rightClick)
+            View.UNION_PICKER -> unionPicker.click(player, holder, slot)
+            View.SPAWN_LIST -> spawnList.click(player, holder, slot)
             View.FLAGS -> rules.clickFlags(player, holder.regionId ?: return, slot, holder.returnToPublish)
             View.EFFECTS -> rules.clickEffects(player, holder.regionId ?: return, slot, holder.returnToPublish)
             View.TRIGGERS -> rules.clickTriggers(player, holder.regionId ?: return, slot, holder.returnToPublish)

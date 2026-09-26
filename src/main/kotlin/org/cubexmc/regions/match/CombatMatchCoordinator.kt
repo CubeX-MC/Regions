@@ -169,6 +169,8 @@ class CombatMatchCoordinator(
         } else {
             runtime.teams.putIfAbsent(team, TeamSnapshot(team, player.name))
         }
+        plugin.reserveMatchEntry(player.uniqueId, runtime.matchId)?.let { return JoinResult.Rejected(it) }
+        runtime.spectators.remove(player.uniqueId)
         runtime.participants[player.uniqueId] = Participant(
             playerId = player.uniqueId,
             name = player.name,
@@ -237,18 +239,34 @@ class CombatMatchCoordinator(
      * 列出过任何一支队伍后再改会被拒绝，避免把已经选边的玩家混进新对阵。
      */
     @Synchronized
-    fun selectTeams(regionId: String, nationA: String, nationB: String, nameA: String?, nameB: String?): Boolean {
+    fun selectTeams(regionId: String, nationA: String, nationB: String, nameA: String?, nameB: String?): Boolean =
+        setTeams(regionId, nationA, nationB, nameA, nameB)
+
+    /**
+     * 设置（或清除）本场双方。GUI 的对阵页是一次点一个队伍，所以两边都允许为 null；
+     * 命令侧的 [selectTeams] 仍然要求一次给全。
+     *
+     * 仍然只在 WAITING 且无人报名时可改：开局后换队伍会让已报名者的身份与资金映射对不上。
+     */
+    @Synchronized
+    fun setTeams(regionId: String, nationA: String?, nationB: String?, nameA: String?, nameB: String?): Boolean {
         val region = plugin.regions().find(regionId) ?: return false
         if (MatchRulesCatalog.rulesFor(region.mode?.type)?.settings(region)?.teamUnit != TeamUnit.NATION) return false
         val runtime = runtimeFor(region, NationBattleRules)
         if (runtime.phase != MatchPhase.WAITING || runtime.participants.isNotEmpty()) return false
-        if (nationA == nationB) return false
-        runtime.options[OPTION_TEAM_A] = nationA
-        runtime.options[OPTION_TEAM_B] = nationB
-        runtime.teamNames[nationA] = nameA ?: nationA
-        runtime.teamNames[nationB] = nameB ?: nationB
+        if (nationA != null && nationA == nationB) return false
+        applyTeamSlot(runtime, OPTION_TEAM_A, nationA, nameA)
+        applyTeamSlot(runtime, OPTION_TEAM_B, nationB, nameB)
         persist(runtime)
         return true
+    }
+
+    private fun applyTeamSlot(runtime: MatchRuntime, option: String, nationId: String?, name: String?) {
+        val previous = runtime.options.remove(option)
+        previous?.let { runtime.teamNames.remove(it) }
+        if (nationId == null) return
+        runtime.options[option] = nationId
+        runtime.teamNames[nationId] = name ?: nationId
     }
 
     /** 当前锁定的双方 Nation；未选择时为空。 */
@@ -317,7 +335,9 @@ class CombatMatchCoordinator(
     fun leave(player: Player, regionId: String): Boolean {
         val runtime = runtimes[regionId] ?: return false
         if (!runtime.participants.containsKey(player.uniqueId)) {
-            return runtime.spectators.remove(player.uniqueId)
+            val removed = runtime.spectators.remove(player.uniqueId)
+            if (removed) plugin.releaseMatchEntry(player.uniqueId, runtime.matchId)
+            return removed
         }
         onLeave(player, regionId, "leave-command")
         return true
@@ -330,6 +350,7 @@ class CombatMatchCoordinator(
         if (runtime.participants.containsKey(player.uniqueId)) {
             return SpectateResult.Rejected("game.match.spectate.is-participant")
         }
+        plugin.reserveMatchEntry(player.uniqueId, runtime.matchId)?.let { return SpectateResult.Rejected(it) }
         runtime.spectators.add(player.uniqueId)
         plugin.sendGame(player, "game.match.spectate.joined", mapOf("id" to regionId))
         // PLAN.md §5.4：观战是"到配置的场外观战点"，本轮不依赖跨世界自由旁观传送。
@@ -343,11 +364,12 @@ class CombatMatchCoordinator(
     @Synchronized
     fun onLeave(player: Player, regionId: String, reason: String) {
         val runtime = runtimes[regionId] ?: return
-        runtime.spectators.remove(player.uniqueId)
+        if (runtime.spectators.remove(player.uniqueId)) plugin.releaseMatchEntry(player.uniqueId, runtime.matchId)
         val participant = runtime.participants[player.uniqueId] ?: return
         when (runtime.phase) {
             MatchPhase.WAITING -> {
                 runtime.participants.remove(player.uniqueId)
+                plugin.releaseMatchEntry(player.uniqueId, runtime.matchId)
                 persist(runtime)
                 broadcast(runtime, "game.match.join.leave", mapOf("player" to player.name))
                 if (runtime.participants.isEmpty()) close(runtime, "empty")
@@ -435,11 +457,20 @@ class CombatMatchCoordinator(
         val player = event.player
         val runtime = runtimeOf(player.uniqueId)
         if (runtime == null) {
-            pendingRespawnRestores.remove(player.uniqueId)?.let { restoreSnapshot(player, it) }
+            gearStore.peek(player.uniqueId)?.respawn?.let { event.respawnLocation = it }
+            pendingRespawnRestores.remove(player.uniqueId)
+            plugin.regionScheduler().runAtEntityLater(player, Runnable {
+                restoreIfPending(player, "respawn")
+            }, 1L)
             return
         }
         val participant = runtime.participants[player.uniqueId]
         if (participant != null && runtime.phase != MatchPhase.FINISHING && runtime.phase != MatchPhase.CLOSED) {
+            if (runtime.settings.maxRounds == 1 && participant.state != ParticipantState.ALIVE) {
+                pendingRespawnRestores.remove(player.uniqueId)
+                regionOf(runtime)?.let { outsideLocation(it) }?.let { event.respawnLocation = it }
+                return
+            }
             // 还有下一回合：不恢复原装备，重生到自己的出生点后重新发本场装备。
             pendingRespawnRestores.remove(player.uniqueId)
             spawnLocation(runtime, participant)?.let { event.respawnLocation = it }
@@ -449,10 +480,11 @@ class CombatMatchCoordinator(
             }
             return
         }
-        pendingRespawnRestores.remove(player.uniqueId)?.let { snapshot ->
-            restoreSnapshot(player, snapshot)
-            snapshot.respawn?.let { event.respawnLocation = it }
-        }
+        gearStore.peek(player.uniqueId)?.respawn?.let { event.respawnLocation = it }
+        pendingRespawnRestores.remove(player.uniqueId)
+        plugin.regionScheduler().runAtEntityLater(player, Runnable {
+            restoreIfPending(player, "respawn")
+        }, 1L)
     }
 
     @Synchronized
@@ -579,7 +611,10 @@ class CombatMatchCoordinator(
             return
         }
         runtime.phase = MatchPhase.PREPARING
-        persist(runtime)
+        if (!persist(runtime)) {
+            abortStart(runtime, "prepare-storage")
+            return
+        }
         broadcast(runtime, "game.match.preparing", emptyMap())
 
         if (runtime.settings.allowFunding && hasFunding(region)) {
@@ -615,7 +650,7 @@ class CombatMatchCoordinator(
                 continue
             }
             scheduleEntity(player) {
-                val ok = synchronized(this) {
+                val preparation = synchronized(this) {
                     if (runtimes[runtime.regionId] !== runtime || runtime.phase != MatchPhase.PREPARING) {
                         return@synchronized null
                     }
@@ -624,12 +659,19 @@ class CombatMatchCoordinator(
                         .onFailure { error ->
                             plugin.log().severe("Failed to prepare ${player.name} for ${region.id}: ${error.message}")
                         }
-                        .getOrDefault(false)
-                    runtime.prepared.add(playerId)
+                        .getOrElse { java.util.concurrent.CompletableFuture.completedFuture(false) }
                     prepared
                 } ?: return@scheduleEntity
-                if (!ok) failures.incrementAndGet()
-                if (pending.decrementAndGet() == 0) finishPreparing(runtime, failures.get())
+                preparation.whenComplete { ok, error ->
+                    synchronized(this) {
+                        if (runtimes[runtime.regionId] !== runtime || runtime.phase != MatchPhase.PREPARING) {
+                            return@whenComplete
+                        }
+                        if (!runtime.prepared.add(playerId)) return@whenComplete
+                        if (error != null || ok != true) failures.incrementAndGet()
+                        if (pending.decrementAndGet() == 0) finishPreparing(runtime, failures.get())
+                    }
+                }
             }
         }
         if (runtime.participants.isEmpty()) finishPreparing(runtime, 0)
@@ -668,17 +710,25 @@ class CombatMatchCoordinator(
     }
 
     /** 单名玩家的开赛准备；返回 false 表示这名玩家失败，本次开赛必须整体撤销。 */
-    private fun prepareParticipant(player: Player, runtime: MatchRuntime, region: RegionDefinition): Boolean {
+    private fun prepareParticipant(
+        player: Player,
+        runtime: MatchRuntime,
+        region: RegionDefinition,
+    ): java.util.concurrent.CompletableFuture<Boolean> {
+        if (player.isDead) return java.util.concurrent.CompletableFuture.completedFuture(false)
         if (shouldReplaceGear(region)) {
             val snapshot = GearSnapshot.capture(player, outsideLocation(region))
             gearStore.put(player.uniqueId, region.id, snapshot)
             runtime.escrowed.add(player.uniqueId)
             applyKit(player, region)
         }
-        val participant = runtime.participants[player.uniqueId] ?: return false
-        spawnLocation(runtime, participant)?.let { spawn -> plugin.regionScheduler().teleportAsync(player, spawn) }
+        val participant = runtime.participants[player.uniqueId]
+            ?: return java.util.concurrent.CompletableFuture.completedFuture(false)
+        val spawn = spawnLocation(runtime, participant)
+            ?: return java.util.concurrent.CompletableFuture.completedFuture(false)
+        val teleport = plugin.regionScheduler().teleportAsync(player, spawn)
         plugin.sendGame(player, "game.match.gear-ready", emptyMap())
-        return true
+        return teleport
     }
 
     /** 屏障超时：点名还没回执的玩家，然后走统一清理（不会留下一半人在场上的比赛）。 */
@@ -750,8 +800,11 @@ class CombatMatchCoordinator(
         )
         for (participant in runtime.participants.values.toList()) {
             val player = plugin.server.getPlayer(participant.playerId) ?: continue
-            if (region != null) plugin.triggers().fire(RegionTrigger.ON_MODE_START, player, region)
             scheduleEntity(player) {
+                if (runtimes[runtime.regionId] !== runtime || runtime.phase != MatchPhase.RUNNING ||
+                    participant.state != ParticipantState.ALIVE || player.isDead
+                ) return@scheduleEntity
+                if (region != null) plugin.triggers().fire(RegionTrigger.ON_MODE_START, player, region)
                 if (runtimes[runtime.regionId] !== runtime || runtime.phase != MatchPhase.RUNNING) return@scheduleEntity
                 spawnLocation(runtime, participant)?.let { plugin.regionScheduler().teleportAsync(player, it) }
             }
@@ -863,7 +916,8 @@ class CombatMatchCoordinator(
             reasonKey = resolution.reasonKey,
             reasonArgs = resolution.reasonArgs,
             forcedBy = forcedBy,
-            finishedAtMillis = clock(),
+            // 落盘用墙钟：`clock()` 是单调时钟，存进文件跨重启没有可比性。
+            finishedAtMillis = System.currentTimeMillis(),
             eliminationOrder = runtime.participants.values
                 .filter { it.eliminatedOrder != null }
                 .sortedBy { it.eliminatedOrder }
@@ -893,6 +947,8 @@ class CombatMatchCoordinator(
         }
         runtime.result = result.copy(rewardState = rewardState)
         recentResults[runtime.regionId] = runtime.result!!
+        // 结果要比比赛记录活得久：close() 会删掉整条比赛，重启后结果页不能因此变空白。
+        matchStore.putResult(runtime.result!!)
         runtime.pendingRestore.clear()
         runtime.pendingRestore.addAll(runtime.participants.keys.filter { gearStore.peek(it) != null })
         runtime.escrowed.clear()
@@ -976,6 +1032,7 @@ class CombatMatchCoordinator(
     @Synchronized
     private fun restoreForMatch(player: Player, runtime: MatchRuntime) {
         if (runtimes[runtime.regionId] !== runtime) return
+        if (player.isDead) return
         val playerId = player.uniqueId
         val stored = gearStore.peek(playerId)
         if (stored == null) {
@@ -988,7 +1045,10 @@ class CombatMatchCoordinator(
             runtime.confirmedRestore.add(playerId)
             // 确认标记必须先落盘：写不进去就保留 escrow 等下次恢复（重写同一快照是幂等的），
             // 不直接解锁（PLAN.md §6.3.7）。
-            if (!persist(runtime)) return
+            if (!persist(runtime)) {
+                runtime.confirmedRestore.remove(playerId)
+                return
+            }
         }
         gearStore.take(playerId)
         runtime.pendingRestore.remove(playerId)
@@ -1017,6 +1077,7 @@ class CombatMatchCoordinator(
 
     @Synchronized
     private fun close(runtime: MatchRuntime, reason: String) {
+        plugin.releaseMatchEntries(runtime.matchId)
         runtimes.remove(runtime.regionId, runtime)
         endingRegions.remove(runtime.regionId)
         matchStore.remove(runtime.matchId)
@@ -1033,6 +1094,8 @@ class CombatMatchCoordinator(
     @Synchronized
     fun recoverPersisted(reason: String) {
         for (snapshot in matchStore.all()) {
+            // Race and hide-and-seek use this store too; their own services recover those records.
+            if (MatchRulesCatalog.rulesFor(snapshot.modeType) == null) continue
             if (snapshot.phase == MatchPhase.CLOSED) {
                 matchStore.remove(snapshot.matchId)
                 continue
@@ -1087,6 +1150,7 @@ class CombatMatchCoordinator(
      */
     @Synchronized
     fun restoreIfPending(player: Player, reason: String): Boolean {
+        if (player.isDead) return false
         val playerId = player.uniqueId
         val stored = gearStore.peek(playerId) ?: return false
         val runtime = matchStore.all()
@@ -1100,6 +1164,12 @@ class CombatMatchCoordinator(
             plugin.log().warn("Cleared the completed recovery record for ${player.name}: $reason")
             return false
         }
+        if (stored.confirmed) {
+            gearStore.take(playerId)
+            runtime?.pendingRestore?.remove(playerId)
+            if (runtime != null) maybeClose(runtime)
+            return false
+        }
         writeSnapshot(player, stored)
         if (runtime != null) {
             runtime.confirmedRestore.add(playerId)
@@ -1111,6 +1181,7 @@ class CombatMatchCoordinator(
                 return false
             }
         }
+        gearStore.markConfirmed(playerId)
         gearStore.take(playerId)
         stored.respawn?.let { plugin.regionScheduler().teleportAsync(player, it) }
         plugin.log().warn("Restored persisted combat escrow for ${player.name}: $reason")
@@ -1285,7 +1356,8 @@ class CombatMatchCoordinator(
         runtimes[regionId]?.participants?.values?.map { it.snapshot() }.orEmpty()
 
     @Synchronized
-    fun result(regionId: String): MatchResult? = runtimes[regionId]?.result ?: recentResults[regionId]
+    fun result(regionId: String): MatchResult? =
+        runtimes[regionId]?.result ?: recentResults[regionId] ?: matchStore.lastResult(regionId)
 
     @Synchronized
     fun spectatorIds(regionId: String): Set<UUID> = runtimes[regionId]?.spectators?.toSet().orEmpty()
@@ -1340,6 +1412,31 @@ class CombatMatchCoordinator(
         return CombatDamagePolicy.decide(membership(attackerId), victim)
     }
 
+    /**
+     * 药水/范围效果能不能落到这个人身上（[MatchEffectPolicy]）。
+     *
+     * 与 [damageDecision] 用同一份成员关系；区别在于纯效果药水不触发伤害事件，
+     * 不单独接一层就会完全绕开隔离。
+     */
+    @Synchronized
+    fun effectDecision(
+        throwerId: UUID?,
+        targetId: UUID,
+        kind: MatchEffectPolicy.EffectKind,
+    ): DamageDecision {
+        val target = membership(targetId)
+        if (throwerId == null) {
+            // 发射器/命令方块扔的药：参赛者一律不受影响，其余人不管。
+            return if (target == null) DamageDecision.UNRELATED else DamageDecision.DENY
+        }
+        return MatchEffectPolicy.decide(
+            membership(throwerId),
+            target,
+            kind,
+            selfInflicted = throwerId == targetId,
+        )
+    }
+
     // ---------------------------------------------------------------- 内部工具
 
     /** 该玩家是否还有任何一场比赛待恢复（含已从内存移除、只留在 MatchStore 记录里的）。 */
@@ -1348,6 +1445,31 @@ class CombatMatchCoordinator(
         if (runtimes.values.any { it.pendingRestore.contains(playerId) }) return true
         return matchStore.all().any { it.pendingRestore.contains(playerId) }
     }
+
+    /**
+     * 比赛是否正在进行——从开赛屏障到回合间隔。
+     *
+     * 用于指令封锁：选手一旦过了屏障就已经拿着比赛装备站在场上，
+     * 这时跑一句 `/home` 就能把对手打空。FINISHING/CLOSED 不算：那时已经在恢复背包。
+     */
+    @Synchronized
+    fun isPlayingLiveMatch(playerId: UUID): Boolean {
+        val runtime = runtimeOf(playerId) ?: return false
+        if (runtime.phase !in LIVE_PHASES) return false
+        val participant = runtime.participants[playerId] ?: return false
+        return participant.state != ParticipantState.LEFT
+    }
+
+    /**
+     * 这名玩家当下所在的比赛场地（参赛、观战或等待装备恢复都算）。
+     * 命令层用它把 `<id>` 变成可选——正在场上的人不应该还要背场地 ID。
+     */
+    @Synchronized
+    fun activeRegionId(playerId: UUID): String? =
+        runtimes.values.firstOrNull {
+            it.participants.containsKey(playerId) || it.spectators.contains(playerId) ||
+                it.pendingRestore.contains(playerId)
+        }?.regionId
 
     private fun runtimeOf(playerId: UUID): MatchRuntime? =
         runtimes.values.firstOrNull { it.participants.containsKey(playerId) }
@@ -1361,7 +1483,7 @@ class CombatMatchCoordinator(
                 rules = rules,
                 settings = rules.settings(region),
                 publishedRevision = region.publishedRevision ?: region.revision,
-                createdAtMillis = clock(),
+                createdAtMillis = System.currentTimeMillis(),
             )
         }
 
@@ -1460,6 +1582,7 @@ class CombatMatchCoordinator(
         player.inventory.armorContents = armorContents
         parseItems(region.mode?.values?.get("offhand")).firstOrNull()?.let { player.inventory.setItemInOffHand(it) }
         player.updateInventory()
+        player.saveData()
     }
 
     private fun parseItems(value: String?): List<ItemStack> {
@@ -1492,7 +1615,9 @@ class CombatMatchCoordinator(
     }
 
     private fun restoreSnapshot(player: Player, snapshot: CombatGearStore.StoredGear) {
+        if (player.isDead) return
         writeSnapshot(player, snapshot)
+        gearStore.markConfirmed(player.uniqueId)
         gearStore.take(player.uniqueId)
     }
 
@@ -1603,5 +1728,13 @@ class CombatMatchCoordinator(
 
         /** 结算观察窗口：200 毫秒（PLAN.md §6.2），用 4 tick 表示，不依赖同 tick 完成。 */
         const val SETTLEMENT_WINDOW_TICKS = 4L
+
+        /** “比赛进行中”的阶段集合（含开赛屏障与回合间隔）。 */
+        private val LIVE_PHASES = setOf(
+            MatchPhase.PREPARING,
+            MatchPhase.COUNTDOWN,
+            MatchPhase.RUNNING,
+            MatchPhase.INTERMISSION,
+        )
     }
 }

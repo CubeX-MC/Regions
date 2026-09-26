@@ -13,6 +13,7 @@ import org.cubexmc.regions.match.LastPlayerStandingRules
 import org.cubexmc.regions.match.MatchSpawns
 import org.cubexmc.regions.match.NationBattleRules
 import org.cubexmc.regions.mode.RegionModeRegistry
+import org.cubexmc.regions.mode.ModeKit
 import org.cubexmc.regions.model.RegionDefinition
 import org.cubexmc.regions.model.ValidationIssue
 import org.cubexmc.regions.model.ValidationSeverity
@@ -281,6 +282,7 @@ class RegionValidationService(
                 }
             }
             "run_race", "boat_race", "horse_race" -> {
+                validateModeGear(issues, region.id, values)
                 val timeout = values["timeout-seconds"]
                     ?: values["max-duration-seconds"]
                     ?: values["duration-seconds"]
@@ -341,15 +343,38 @@ class RegionValidationService(
                 }
                 validateItemList(issues, region.id, "seeker-kit", values["seeker-kit"])
                 validateItemList(issues, region.id, "hider-kit", values["hider-kit"])
-                validateLocation(
-                    issues,
-                    region.id,
-                    "respawn",
-                    values["respawn"] ?: values["outside"] ?: values["spectator"],
-                    required = false,
-                )
+                validateModeGear(issues, region.id, values, "seeker-kit", "hider-kit")
             }
         }
+    }
+
+    /**
+     * 竞速与捉迷藏的装备配置。
+     *
+     * 这两类玩法此前**不读**任何装备键：`kit=DIAMOND_SWORD` 能通过校验、能发布，
+     * 然后什么都不会发生。现在键真的生效了，校验也必须跟上，否则只是把
+     * "静默无效"换成了"开赛时才炸"。
+     *
+     * 接管装备就必须有返回点：入场前快照要靠它把人送回场外，没有返回点的话
+     * 被淘汰的选手会留在赛道里，恢复也无处可去。
+     */
+    private fun validateModeGear(
+        issues: MutableList<ValidationIssue>,
+        regionId: String,
+        values: Map<String, String>,
+        vararg extraKitKeys: String,
+    ) {
+        validateItemList(issues, regionId, "kit", values["kit"])
+        validateItemList(issues, regionId, "armor", values["armor"], maxEntries = 4)
+        validateItemList(issues, regionId, "offhand", values["offhand"], maxEntries = 1)
+        val replacesGear = ModeKit.shouldReplaceGear(values, *extraKitKeys)
+        validateLocation(
+            issues,
+            regionId,
+            "respawn",
+            values["respawn"] ?: values["outside"] ?: values["spectator"],
+            required = replacesGear,
+        )
     }
 
     /**

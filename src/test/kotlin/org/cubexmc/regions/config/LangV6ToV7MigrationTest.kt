@@ -58,7 +58,7 @@ class LangV6ToV7MigrationTest {
         assertTrue(report.migrated())
         assertEquals(6, report.fromVersion())
         val yaml = reload(file)
-        assertEquals(8, yaml.getInt("lang-version"), "6→7→8 的链要一路走完")
+        assertEquals(11, yaml.getInt("lang-version"), "6→7→8→9→10→11 的链要一路走完")
         // lore 的最后一行拆成了 create-hint，其余行不动。
         val lore = yaml.getStringList("gui.template.entry.lore")
         assertEquals(6, lore.size)
@@ -119,7 +119,7 @@ class LangV6ToV7MigrationTest {
 
         assertTrue(report.migrated())
         val yaml = reload(file)
-        assertEquals(8, yaml.getInt("lang-version"))
+        assertEquals(11, yaml.getInt("lang-version"))
         assertEquals(6, yaml.getStringList("gui.template.entry.lore").size)
         assertEquals("<green>Click to validate and create the venue.", yaml.getString("gui.template.entry.create-hint"))
         assertEquals("<yellow>Click to review replacing the current configuration.", yaml.getString("gui.template.entry.apply-hint"))
@@ -147,8 +147,8 @@ class LangV6ToV7MigrationTest {
         val report = runMigration("lang/zh_CN.yml")
 
         assertTrue(report.migrated())
-        // 6→7 的自定义 lore 说明 + 7→8 的补键摘要。
-        assertEquals(2, report.warnings().size)
+        // 6→7 的自定义 lore 说明 + 7→8、8→9、9→10 各一条补键摘要。
+        assertEquals(5, report.warnings().size)
         assertTrue(
             report.warnings().any { it.contains("gui.template.entry.lore") },
             "缺少自定义 lore 的说明：${report.warnings()}",
@@ -174,7 +174,7 @@ class LangV6ToV7MigrationTest {
             "空文件不该产生保留类警告：${report.warnings()}",
         )
         val yaml = reload(file)
-        assertEquals(8, yaml.getInt("lang-version"))
+        assertEquals(11, yaml.getInt("lang-version"))
         assertEquals("<yellow>应用模板", yaml.getString("gui.detail.apply-template.name"))
         assertEquals("<green>点击验证并创建场地。", yaml.getString("gui.template.entry.create-hint"))
         assertEquals("<yellow>点击检查并替换当前配置。", yaml.getString("gui.template.entry.apply-hint"))
@@ -200,7 +200,7 @@ class LangV6ToV7MigrationTest {
 
         assertTrue(report.migrated())
         val yaml = YamlConfiguration().apply { load(file) }
-        assertEquals(8, yaml.getInt("lang-version"))
+        assertEquals(11, yaml.getInt("lang-version"))
         // 服主写过的值与未知键原样保留。
         assertEquals("kept", yaml.getString("prefix"))
         assertEquals("我的自定义空闲", yaml.getString("labels.state.idle"))

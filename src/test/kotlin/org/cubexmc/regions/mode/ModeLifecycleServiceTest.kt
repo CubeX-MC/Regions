@@ -9,6 +9,7 @@ import org.cubexmc.regions.RegionsPlugin
 import org.cubexmc.regions.config.LanguageManager
 import org.cubexmc.regions.effect.ScopedEffectService
 import org.cubexmc.regions.match.JoinResult
+import org.cubexmc.regions.match.MatchStore
 import org.cubexmc.regions.model.ModeConfig
 import org.cubexmc.regions.model.RegionDefinition
 import org.cubexmc.regions.model.RegionSourceRef
@@ -55,13 +56,14 @@ class ModeLifecycleServiceTest {
         harness.register(region, player)
         val service = RaceModeService(harness.plugin)
 
-        service.onEnter(player, region)
+        // 走进赛道不再自动报名（与战斗层同一条规则），必须先 join。
+        assertTrue(service.join(player, region.id) is JoinResult.Joined)
         assertTrue(service.ready(player, region.id))
         assertEquals(GamePhase.RUNNING, service.status(region.id).phase)
         val firstTimeout = harness.delayed.single { it.delay == 40L }.task
 
         assertTrue(service.forceEnd(region.id, "test-restart"))
-        service.onEnter(player, region)
+        assertTrue(service.join(player, region.id) is JoinResult.Joined)
         assertTrue(service.ready(player, region.id))
         assertEquals(GamePhase.RUNNING, service.status(region.id).phase)
 
@@ -156,8 +158,8 @@ class ModeLifecycleServiceTest {
         harness.register(region, first, second)
         val service = RaceModeService(harness.plugin)
 
-        service.onEnter(first, region)
-        service.onEnter(second, region)
+        assertTrue(service.join(first, region.id) is JoinResult.Joined)
+        assertTrue(service.join(second, region.id) is JoinResult.Joined)
         service.ready(first, region.id)
         service.ready(second, region.id)
         service.onLeave(second, region.id, "left-during-start-check")
@@ -173,8 +175,8 @@ class ModeLifecycleServiceTest {
         first: Player,
         second: Player,
     ) {
-        service.onEnter(first, region)
-        service.onEnter(second, region)
+        assertTrue(service.join(first, region.id) is JoinResult.Joined)
+        assertTrue(service.join(second, region.id) is JoinResult.Joined)
         assertTrue(service.ready(first, region.id))
         assertTrue(service.ready(second, region.id))
         assertEquals(GamePhase.RUNNING, service.status(region.id).phase)
@@ -221,6 +223,10 @@ class ModeLifecycleServiceTest {
         `when`(plugin.effects()).thenReturn(effects)
         `when`(plugin.audit()).thenReturn(audit)
         `when`(plugin.rewards()).thenReturn(rewards)
+        // 八种玩法把结果写进同一个 store；插件持有，服务借用。
+        `when`(plugin.matchStore()).thenReturn(
+            MatchStore(tempDir.resolve("matches.yml").toFile(), CubexLogger(Logger.getLogger("ModeLifecycleServiceTest"))),
+        )
         // Mode services resolve every player-facing string through the language file; echoing the
         // key back keeps these lifecycle tests about state transitions rather than wording.
         val lang = mock(LanguageManager::class.java)

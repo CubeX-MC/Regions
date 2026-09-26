@@ -11,7 +11,6 @@ import org.cubexmc.regions.match.MatchResult
 import org.cubexmc.regions.match.MatchStore
 import org.cubexmc.regions.match.SpectateResult
 import org.cubexmc.regions.model.RegionDefinition
-import java.io.File
 import java.util.UUID
 
 /**
@@ -24,12 +23,13 @@ import java.util.UUID
  */
 class CombatModeService(private val plugin: RegionsPlugin) {
     private val gearStore = CombatGearStore(plugin)
-    private val matchStore = MatchStore(File(plugin.dataFolder, "matches.yml"), plugin.log())
+
+    /** 结果与比赛快照的落盘由插件统一持有（八种玩法共用一份），这里只借用。 */
+    private val matchStore: MatchStore = plugin.matchStore()
     private val coordinator = CombatMatchCoordinator(plugin, gearStore, matchStore)
 
     init {
         gearStore.load()
-        matchStore.reload()
     }
 
     // ------------------------------------------------------------ 会话入口
@@ -57,6 +57,12 @@ class CombatModeService(private val plugin: RegionsPlugin) {
 
     fun isEnding(regionId: String): Boolean = coordinator.isEnding(regionId)
 
+    /** 比赛进行中（开赛屏障→回合间隔）的选手；指令封锁据此判定。 */
+    fun isPlayingLiveMatch(playerId: java.util.UUID): Boolean = coordinator.isPlayingLiveMatch(playerId)
+
+    /** 玩家正在参与（或等待恢复）的比赛所在场地；命令省略 `<id>` 时优先用它。 */
+    fun activeRegionId(playerId: java.util.UUID): String? = coordinator.activeRegionId(playerId)
+
     fun isCombatMode(region: RegionDefinition): Boolean = coordinator.isCombatMode(region)
 
     /** 装备是否仍在托管中（比赛中或等待恢复）；托管期间不得丢弃/拾取临时装备。 */
@@ -81,6 +87,12 @@ class CombatModeService(private val plugin: RegionsPlugin) {
 
     fun selectedTeams(regionId: String): Pair<String?, String?> = coordinator.selectedTeams(regionId)
 
+    /** GUI 对阵页：一次设一个队伍，两边都可为 null（= 取消该队）。 */
+    fun setTeams(regionId: String, nationA: String?, nationB: String?, nameA: String? = null, nameB: String? = null): Boolean =
+        coordinator.setTeams(regionId, nationA, nationB, nameA, nameB)
+
+    fun clearTeams(regionId: String): Boolean = coordinator.setTeams(regionId, null, null, null, null)
+
     // ------------------------------------------------------------ 查询
 
     fun membership(playerId: UUID) = coordinator.membership(playerId)
@@ -88,6 +100,10 @@ class CombatModeService(private val plugin: RegionsPlugin) {
     /** 伤害隔离判定；[playerSourced] 为 false 时表示生物/环境伤害，交回原有规则。 */
     fun damageDecision(attackerId: UUID?, victimId: UUID, playerSourced: Boolean) =
         coordinator.damageDecision(attackerId, victimId, playerSourced)
+
+    /** 药水/范围效果的隔离判定；与 [damageDecision] 同一份成员关系。 */
+    fun effectDecision(throwerId: UUID?, targetId: UUID, kind: org.cubexmc.regions.match.MatchEffectPolicy.EffectKind) =
+        coordinator.effectDecision(throwerId, targetId, kind)
 
     fun participants(regionId: String): List<MatchParticipant> = coordinator.participants(regionId)
 

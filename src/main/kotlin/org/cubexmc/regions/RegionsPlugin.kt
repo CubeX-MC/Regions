@@ -15,6 +15,8 @@ import org.cubexmc.regions.command.RegionsCommand
 import org.cubexmc.regions.capability.BuiltInRegionCapabilities
 import org.cubexmc.regions.capability.CapabilityCatalog
 import org.cubexmc.regions.capability.CapabilityKind
+import org.cubexmc.regions.capability.ModeParameterSchema
+import org.cubexmc.regions.match.MatchStore
 import org.cubexmc.regions.config.LanguageManager
 import org.cubexmc.regions.config.RegionBaseline
 import org.cubexmc.regions.effect.ScopedEffectService
@@ -57,6 +59,19 @@ import java.io.File
 import kotlin.math.max
 
 class RegionsPlugin : CubexPlugin() {
+    private val matchAdmission = org.cubexmc.regions.match.MatchAdmission()
+
+    fun reserveMatchEntry(playerId: java.util.UUID, matchId: java.util.UUID): String? {
+        if (combatModeService?.isGearEscrowed(playerId) == true ||
+            raceModeService?.isGearEscrowed(playerId) == true ||
+            roundModeService?.isGearEscrowed(playerId) == true
+        ) return "game.match.join.restoring"
+        return matchAdmission.reserve(playerId, matchId)
+    }
+
+    fun releaseMatchEntry(playerId: java.util.UUID, matchId: java.util.UUID) = matchAdmission.release(playerId, matchId)
+
+    fun releaseMatchEntries(matchId: java.util.UUID) = matchAdmission.releaseMatch(matchId)
     private var resourceFiles: ResourceFiles? = null
     private var languageManager: LanguageManager? = null
     private var regionStorage: RegionStorage? = null
@@ -64,6 +79,7 @@ class RegionsPlugin : CubexPlugin() {
     private var sourceRegistry: RegionSourceRegistry? = null
     private var unionProviderRegistry: UnionProviderRegistry? = null
     private var modeRegistry: RegionModeRegistry? = null
+    private var matchStore: MatchStore? = null
     private var combatModeService: CombatModeService? = null
     private var raceModeService: RaceModeService? = null
     private var roundModeService: RoundModeService? = null
@@ -130,14 +146,9 @@ class RegionsPlugin : CubexPlugin() {
         }
 
         modeRegistry = RegionModeRegistry()
-        modes().register("free_event")
-        modes().register("dual_pvp")
-        modes().register("union_war")
-        modes().register("free_for_all")
-        modes().register("run_race")
-        modes().register("boat_race")
-        modes().register("horse_race")
-        modes().register("hide_and_seek")
+        // 玩法清单只有一处真相：注册、能力目录与参数表都读 ModeParameterSchema，
+        // 新增玩法时不会出现"注册了但没 descriptor"或"有 descriptor 但没注册"。
+        ModeParameterSchema.ALL_MODES.forEach { modes().register(it) }
 
         flagRegistry = RegionFlagRegistry()
         flags().registerDefaults()
@@ -156,6 +167,10 @@ class RegionsPlugin : CubexPlugin() {
         verifyCapabilityCatalog()
 
         triggerService = RegionTriggerService(this)
+        // 「每块场地最后一次比赛结果」对八种玩法是同一件事,所以只有一个 store:
+        // 战斗层、竞速与捉迷藏都写进这里,`/regions game <id> result` 与大厅结果卡读同一份。
+        matchStore = bind(MatchStore(File(dataFolder, "matches.yml"), log()))
+        matchStore().reload()
         combatModeService = CombatModeService(this)
         raceModeService = RaceModeService(this)
         roundModeService = RoundModeService(this)
@@ -193,6 +208,7 @@ class RegionsPlugin : CubexPlugin() {
         lifecycle().reconcile()
 
         registerListener(PlayerLifecycleListener(this))
+        registerListener(org.cubexmc.regions.listener.GearTransferListener(this))
         registerListener(gui())
         registerCommand()
         scheduleWatchdog()
@@ -334,6 +350,8 @@ class RegionsPlugin : CubexPlugin() {
 
     fun modes(): RegionModeRegistry = modeRegistry ?: throw IllegalStateException("modeRegistry not initialized")
 
+    fun matchStore(): MatchStore = matchStore ?: throw IllegalStateException("matchStore not initialized")
+
     fun combatModes(): CombatModeService = combatModeService ?: throw IllegalStateException("combatModeService not initialized")
 
     fun raceModes(): RaceModeService = raceModeService ?: throw IllegalStateException("raceModeService not initialized")
@@ -393,6 +411,13 @@ class RegionsPlugin : CubexPlugin() {
             )
         }
     }
+
+    /**
+     * 比赛进行中额外放行的指令（`modes.allowed-commands`）。
+     *
+     * 插件自己的根指令不在这里，它们永远放行（否则选手连退赛都做不到）。
+     */
+    fun matchAllowedCommands(): List<String> = config.getStringList("modes.allowed-commands")
 
     private fun configureAuthority() {
         authorityService = RegionAuthorityService(
@@ -498,11 +523,18 @@ class RegionsPlugin : CubexPlugin() {
         // 等他们登录时由 restoreIfPending 继续（PLAN.md §6.2）。
         runCatching { combatModes().recoverPersisted("enable-recovery") }
             .onFailure { log().severe("Failed to recover unfinished matches: ${it.message}") }
+        runCatching { roundModes().recoverPersisted("enable-recovery") }
+            .onSuccess { if (it > 0) log().warn("Recovered $it interrupted hide-and-seek match(es) after restart.") }
+            .onFailure { log().severe("Failed to recover unfinished hide-and-seek matches: ${it.message}") }
+        runCatching { raceModes().recoverPersisted("enable-recovery") }
+            .onSuccess { if (it > 0) log().warn("Recovered $it interrupted race match(es) after restart.") }
+            .onFailure { log().severe("Failed to recover unfinished races: ${it.message}") }
         for (player in server.onlinePlayers.toList()) {
             regionScheduler().runAtEntity(player, Runnable {
                 effects().restoreIfPending(player, "enable-recovery")
                 combatModes().restoreIfPending(player, "enable-recovery")
                 roundModes().restoreIfPending(player, "enable-recovery")
+                raceModes().restoreIfPending(player, "enable-recovery")
                 detection().updatePlayer(player)
             })
         }

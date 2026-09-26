@@ -34,6 +34,15 @@ interface UnionProvider {
     fun allUnions(): List<UnionRef> = emptyList()
 
     /**
+     * 玩家"当下正在管的那个领地"所属的工会——Lands 里就是 `/l edit` 选定的 Land 的 Nation。
+     *
+     * 专供选队时省输入用：场地主多半就是其中一方，没必要再把自己国家的名字敲一遍。
+     * 返回 null 的情形都是"推导不出来"：没选领地、领地不属于任何国家、API 不可用——
+     * 调用方应当回退到让人明确选，**不得猜**。
+     */
+    fun getEditUnion(playerId: UUID): UnionRef? = null
+
+    /**
      * 两个 Nation 之间是否处于敌对关系（PLAN.md §7.2 高级 `enemy-only`）。
      *
      * 返回 `null` 表示**无法验证**（API 不支持、对象解析不到、关系未知）。调用方必须按

@@ -34,10 +34,12 @@ class LanguageFileTest {
         val english = load("/lang/en_US.yml")
         val untranslated = english.getKeys(true)
             .filterNot { english.isConfigurationSection(it) }
+            .filterNot { NATIVE_LANGUAGE_NAMES.contains(it) }
             .filter { key -> values(english, key).any { CJK.containsMatchIn(it) } }
 
         assertEquals(emptyList<String>(), untranslated)
     }
+
 
     @Test
     fun `menu entries that build a button expose a name`() {
@@ -94,6 +96,12 @@ class LanguageFileTest {
     }
 
     private companion object {
+        /**
+         * 语言名字按惯例用**它自己的语言**写（中文 / English），
+         * 英文界面里出现"中文"不是漏翻，而是语言选择器的正确做法。
+         */
+        val NATIVE_LANGUAGE_NAMES = setOf("gui.lobby.language.zh_CN", "gui.lobby.language.en_US")
+
         val CJK = Regex("[\\u4e00-\\u9fff]")
         val LEGACY_CODE = Regex("(?i)&(#[0-9a-f]{6}|[0-9a-fk-or])")
     }

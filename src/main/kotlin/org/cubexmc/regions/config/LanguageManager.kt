@@ -100,8 +100,9 @@ class LanguageManager(private val plugin: RegionsPlugin) : Reloadable {
             return diagnostic.ifBlank { code }
         }
         val resolved = LinkedHashMap(args)
-        if (fieldPath != null) {
-            val leaf = fieldPath.substringAfterLast('.')
+        val field = fieldPath ?: args["field"]
+        if (field != null) {
+            val leaf = field.substringAfterLast('.')
             // 字段译名有两种历史写法：`labels.field.*`（M1.2 起的规范位置）与 `labels.*`
             //（respawn/start/finish 这类早期词条）。先查前者，再退到后者，最后才是原样字段名——
             // 否则"缺少 respawn 的坐标"这种句子会把内部字段名露给玩家。
@@ -126,6 +127,9 @@ class LanguageManager(private val plugin: RegionsPlugin) : Reloadable {
         }
         return if (reason.isNotBlank() && has(reason)) messageFor(sender, reason) else reason
     }
+
+    /** 服务器是否允许玩家自选语言（`locale-mode: player`）。GUI 据此决定要不要显示语言按钮。 */
+    fun playerLocaleEnabled(): Boolean = localeMode.equals("player", ignoreCase = true)
 
     /** 读取玩家手动语言选择；未选择返回 null（跟随客户端/服务器）。 */
     fun playerSelectedLocale(player: Player): String? =
@@ -180,17 +184,7 @@ class LanguageManager(private val plugin: RegionsPlugin) : Reloadable {
         args: Map<String, String> = emptyMap(),
         fieldPath: String? = null,
         diagnostic: String = "",
-    ): String {
-        if (!has("errors.$code")) {
-            return diagnostic.ifBlank { code }
-        }
-        val resolved = LinkedHashMap(args)
-        if (fieldPath != null) {
-            val leaf = fieldPath.substringAfterLast('.')
-            resolved["field"] = label("labels.field.$leaf", leaf)
-        }
-        return message("errors.$code", resolved)
-    }
+    ): String = issueLineFor(null, code, args, fieldPath, diagnostic)
 
     fun severityLabel(severity: ValidationSeverity): String =
         label("labels.severity.${severity.name.lowercase()}", severity.name)

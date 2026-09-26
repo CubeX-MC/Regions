@@ -9,6 +9,9 @@ import org.cubexmc.regions.mode.gameStatusLine
 import org.cubexmc.regions.mode.GameStatus
 import org.cubexmc.regions.model.RegionDefinition
 import org.cubexmc.regions.model.RegionLifecycle
+import org.cubexmc.regions.model.ValidationIssue
+import org.cubexmc.regions.service.ReadinessReport
+import org.cubexmc.regions.service.VenueReadiness
 import org.cubexmc.regions.service.RegionOverlapResolver
 import kotlin.math.ceil
 import kotlin.math.max
@@ -59,6 +62,11 @@ internal object ActivityLobbyLogic {
     fun availableModes(entries: List<LobbyEntry>): List<String> =
         entries.mapNotNull { it.region.mode?.type }.distinct().sorted()
 
+    /**
+     * 卡片的可报名判定：全部委托 [VenueReadiness]，这里只把"最靠前的那条原因"翻成卡片文案。
+     *
+     * 曾经这段是自己一套 if 链，与创建向导的必填项、发布页的红条各说各话；现在三处同源。
+     */
     fun entry(
         region: RegionDefinition,
         status: GameStatus,
@@ -66,24 +74,21 @@ internal object ActivityLobbyLogic {
         sourceAvailable: Boolean,
         sourceLabel: String,
         unionsAvailable: Boolean,
+        configIssues: List<ValidationIssue> = emptyList(),
     ): LobbyEntry {
-        if (!sourceAvailable) {
-            return LobbyEntry(region, false, "gui.lobby.reason.source-unavailable", mapOf("source" to sourceLabel))
-        }
-        if (region.mode?.type.equals("union_war", true) && !unionsAvailable) {
-            return LobbyEntry(region, false, "gui.lobby.reason.unions-unavailable")
-        }
-        if (ending) {
-            return LobbyEntry(region, false, "gui.lobby.reason.restoring")
-        }
-        if (status.phase == GamePhase.RUNNING) {
-            return LobbyEntry(region, false, "gui.lobby.reason.running")
-        }
-        val maxPlayers = region.mode?.values?.get("max-players")?.toIntOrNull() ?: 0
-        if (maxPlayers > 0 && status.players >= maxPlayers) {
-            return LobbyEntry(region, false, "gui.lobby.reason.full")
-        }
-        return LobbyEntry(region, true)
+        val report = VenueReadiness.evaluate(
+            region,
+            configIssues = configIssues,
+            sourceAvailable = sourceAvailable,
+            sourceLabel = sourceLabel,
+            unionsAvailable = unionsAvailable,
+            restoring = ending,
+            phase = status.phase,
+            players = status.players,
+        )
+        // 只用运行时那几层：向导意义上的"必填项"不该把已发布的场地变灰。
+        val blocker = report.primaryOf(*ReadinessReport.RUNTIME_STAGES) ?: return LobbyEntry(region, true)
+        return LobbyEntry(region, false, "readiness." + blocker.code, blocker.args)
     }
 }
 
@@ -108,6 +113,21 @@ internal class ActivityLobbyMenu(private val gui: RegionsGui) {
         )
         for ((index, entry) in entries.drop(safePage * ActivityLobbyLogic.PAGE_SIZE).take(ActivityLobbyLogic.PAGE_SIZE).withIndex()) {
             inventory.setItem(index, card(player, entry))
+        }
+        // 玩家侧的两个入口：语言与"我的比赛"——不必再去记 `/regions language` 与场地名。
+        if (plugin.lang().playerLocaleEnabled()) {
+            inventory.setItem(51, languageButton(player))
+        }
+        currentMatchRegion(player)?.let { current ->
+            inventory.setItem(
+                50,
+                text.item(
+                    player,
+                    Material.COMPASS,
+                    "gui.lobby.my-match",
+                    mapOf("name" to current.name),
+                ),
+            )
         }
         if (safePage > 0) inventory.setItem(45, text.named(GuiIcons.BACK, text.text(player, "gui.common.previous-page")))
         if (safePage + 1 < pages) inventory.setItem(53, text.named(Material.ARROW, text.text(player, "gui.common.next-page")))
@@ -158,6 +178,12 @@ internal class ActivityLobbyMenu(private val gui: RegionsGui) {
             46 -> open(player, 0, filter.cycleMode(ActivityLobbyLogic.availableModes(all)))
             47 -> open(player, 0, filter.copy(joinableOnly = !filter.joinableOnly))
             48 -> open(player, 0, LobbyFilter())
+            50 -> currentMatchRegion(player)?.let { gui.gameLobby.open(player, it.id, holder.lobbyPage, filter) }
+            51 -> if (plugin.lang().playerLocaleEnabled()) {
+                // 循环 zh_CN → en_US → 自动，切完重开大厅，整页立刻换语言——这本身就是反馈。
+                plugin.lang().setPlayerLocale(player, nextLocale(plugin.lang().playerSelectedLocale(player)))
+                open(player, holder.lobbyPage, filter)
+            }
             49 -> if (gui.canEnterManagementSilent(player)) gui.openMain(player)
             in 0 until ActivityLobbyLogic.PAGE_SIZE -> {
                 val entry = entries.getOrNull(holder.lobbyPage * ActivityLobbyLogic.PAGE_SIZE + slot) ?: return
@@ -170,6 +196,32 @@ internal class ActivityLobbyMenu(private val gui: RegionsGui) {
             }
         }
     }
+
+    private fun languageButton(player: Player): ItemStack {
+        val selected = plugin.lang().playerSelectedLocale(player)
+        return text.item(
+            player,
+            Material.BOOK,
+            "gui.lobby.language",
+            mapOf(
+                "current" to (selected?.let { text.text(player, "gui.lobby.language.$it") }
+                    ?: text.text(player, "gui.lobby.language.auto")),
+                "next" to (nextLocale(selected)?.let { text.text(player, "gui.lobby.language.$it") }
+                    ?: text.text(player, "gui.lobby.language.auto")),
+            ),
+        )
+    }
+
+    /** zh_CN → en_US → 自动（null）→ zh_CN。 */
+    private fun nextLocale(current: String?): String? = when (current) {
+        null -> "zh_CN"
+        "zh_CN" -> "en_US"
+        else -> null
+    }
+
+    /** 玩家当下参与的比赛所在场地（含观战与待恢复）。 */
+    private fun currentMatchRegion(player: Player): RegionDefinition? =
+        plugin.combatModes().activeRegionId(player.uniqueId)?.let { plugin.regions().find(it) }
 
     private fun publishedRegions(player: Player): List<RegionDefinition> =
         plugin.authority().visibleRegions(player, plugin.regions().all())
@@ -186,6 +238,7 @@ internal class ActivityLobbyMenu(private val gui: RegionsGui) {
             sourceAvailable = source?.isAvailable() == true,
             sourceLabel = text.label(player, "labels.source." + region.source.type, region.source.type),
             unionsAvailable = unionsAvailable,
+            configIssues = plugin.validation().validate(region),
         )
     }
 

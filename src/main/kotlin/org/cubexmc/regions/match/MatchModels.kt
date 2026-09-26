@@ -127,6 +127,14 @@ data class MatchResult(
     val finishedAtMillis: Long,
     /** 结算批次内的淘汰顺序（先出局的在前）；仍存活者不在其中。 */
     val eliminationOrder: List<UUID> = emptyList(),
+    /**
+     * 名次顺序，**第 1 名在前**。
+     *
+     * 刻意与 [eliminationOrder] 分开：淘汰制里"先出局"是最后一名，竞速里"先完赛"是第一名，
+     * 两者顺序相反。用同一个字段承载会让结果页在某些玩法上把冠亚军倒过来念，
+     * 所以竞速直接写完赛顺序，淘汰制由淘汰顺序倒推后写进来。
+     */
+    val standings: List<UUID> = emptyList(),
 )
 
 /**

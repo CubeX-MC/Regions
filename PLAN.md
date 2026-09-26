@@ -1,6 +1,11 @@
 # Regions 使用体验、国际化与战斗玩法实施计划
 
-> 日期：2026-09-07。状态：**M0–M1 全部、M2.1–M2.5 完成（M2.5 的进区提示冷却与存储层 revision 守卫除外），通过 `:Regions:test`（145 例，2026-09-12 补了两条权限声明用例）/ `:Regions:build`；M3–M7 的代码与自动化验证已完成（192 例，`:Regions:build` 与 `:Regions:jarGate` 通过），§10.2 的实服／真人验收尚未执行**。
+> **2026-09-23 更新**：完成准备回执、装备恢复、跨场占位、容器保护、字段翻译及竞速／捉迷藏重启中止记录加固；380 项测试通过。实际 Lands/Folia、多人及真实崩溃恢复仍按 §10.2 验收。
+> 隔离 Paper 加载／语言 v8→v11／命令重载验证已执行，详见 [本轮证据](docs/completion-2026-09-22.md)。
+> 下文“代码全部完成”是历史记录，不代表通过 §10.2 的全部发布门槛；真实 Lands/Folia 与多人故障矩阵仍待完成。
+
+> 日期：2026-09-07。状态：**M0–M1 全部、M2.1–M2.5 完成（M2.5 的进区提示冷却与存储层 revision 守卫除外），通过 `:Regions:test`（145 例，2026-09-12 补了两条权限声明用例）/ `:Regions:build`；M3–M7 的代码与自动化验证已完成，2026-09-19 又把另外七种玩法补齐到与决斗同级（见 §11），
+> 合计 **365 例**，`:Regions:build` 与 `:Regions:jarGate` 通过；§10.2 的实服／真人验收**仍然全部未执行**。
 > 本文依据当前源码、现有测试及本次玩家反馈制定；没有把历史验收或代码静态检查当作本轮实服验收。
 > 按用户本次要求，Regions 本轮具体任务在本文件维护；根 [PLAN.md](../PLAN.md) §5.2 保留历史、总体方向与入口，不重复维护本轮任务清单。
 
@@ -375,7 +380,31 @@ stateDiagram-v2
 
 **不通过即阻止对应功能发布**：仍有无法识别的英文错误正文、UI 显示成功但服务未执行、越权、线程违规、错误 Nation 分队、错误胜者、复制／吞装备、重复付款、坏数据被覆盖、迁移失败或新模式仅注册但无运行链路。最终部署使用非 `plain` jar；推送 main 按根 AGENTS 约定处理。
 
-## 11. M3–M7 交付记录（2026-09-13）
+## 11. 玩法补齐交付记录（2026-09-19）
+
+本轮不新增玩法，把既有的另外七种提到与 `dual_pvp` 同级。范围与 §3 的边界一致：
+不扩展 Source、不做跨服匹配、不加积分天梯，也不改已发布 revision 的运行方式。
+
+| 差距（改前） | 落点 |
+|---|---|
+| 八种玩法共用一份 40 多键的参数袋且 `strict = false`，写到别的玩法上的键静默生效 | [ModeParameterSchema.kt](src/main/kotlin/org/cubexmc/regions/capability/ModeParameterSchema.kt)，每种玩法独立参数表 + 严格校验 |
+| 竞速完全不读 `kit`/`armor`/`offhand`/`replace-gear`，校验却放行 | [ModeKit.kt](src/main/kotlin/org/cubexmc/regions/mode/ModeKit.kt) + [RaceModeService.kt](src/main/kotlin/org/cubexmc/regions/mode/RaceModeService.kt) |
+| 捉迷藏 `restoreStored()` 先删记录再写背包（吞装备） | [ModeGearEscrow.kt](src/main/kotlin/org/cubexmc/regions/mode/ModeGearEscrow.kt)，写回 → 确认 → 删除 |
+| 走进竞速／捉迷藏场地即入队 | [ModeRoster.kt](src/main/kotlin/org/cubexmc/regions/mode/ModeRoster.kt)，显式 `join` |
+| 这两类玩法没有任何成员隔离 | [ModeDamagePolicy.kt](src/main/kotlin/org/cubexmc/regions/mode/ModeDamagePolicy.kt) |
+| 这两类玩法没有结果记录 | 共用 `MatchStore`（插件持有），新增 `MatchResult.standings` |
+| 竹筏在划船赛里永远过不了终点 | [RaceCourse.kt](src/main/kotlin/org/cubexmc/regions/mode/RaceCourse.kt) |
+| `free_event` 从未说清自己不是比赛 | 参数表只留返回点；`join`/`ready`/`start` 明确拒绝 |
+
+自动化：`:Regions:test` **365 例**全绿，`:Regions:build` 与 `:Regions:jarGate` 通过。
+新增 `ModeParameterSchemaTest`、`RaceCourseTest`、`ModeDamagePolicyTest`、
+`ModeGearEscrowTest`、`ModeParityTest` 与共享装置 `ModeServiceHarness`。
+
+**§10.2 的实服与真人验收本轮仍然全部未执行**；新增的验收脚本见
+[REAL_PLAYER_TEST.md](REAL_PLAYER_TEST.md) 的 G–M 节。行为变化（进区不再自动报名、
+这两类玩法期间不放行玩家伤害、参数收紧挡住重新发布）必须由真人确认后才谈发布。
+
+## 12. M3–M7 交付记录（2026-09-13）
 
 | 项目 | 结果 |
 |---|---|
@@ -390,4 +419,3 @@ stateDiagram-v2
 | 配置与权限 | 新增 `modes.entry-prompt-cooldown-seconds`（默认 60）；新增 `regions.game.join`、`regions.game.spectate` 并在代码中真实检查 |
 | 加载冒烟（实服，2026-09-13） | 在 `Regions/run`（Paper 1.21.11 + Java 21.0.5，含**升级前遗留**的 `plugins/Regions` 数据）用 `:Regions:runServer` 加载本工作树构建的 `regions-0.1.0.jar`：`Regions enabled with 1 configured regions`，启动期能力目录校验通过（否则 `verifyCapabilityCatalog` 会直接抛错，等价于"8 种玩法含 `free_for_all` 全部注册一致"），遗留 `templates.yml` 走 v1→v2 迁移并留备份，日志内无 Regions 级 ERROR/WARN。**边界**：没有玩家连接、没有实际开赛，所以这只证明"能在真实服务端加载并完成注册/迁移"，不能替代 §10.2 的多人验收 |
 | **未执行** | §10.2 的全部实服与真人项目：候选服旧数据升级、双语真人任务、Paper/Purpur/Folia 差异、Lands 真实归队与 PVP 交互、多人故障矩阵。这些是本轮尚未收口的门槛，不能由自动化结果代替，也不能用上面那次加载冒烟代替 |
-

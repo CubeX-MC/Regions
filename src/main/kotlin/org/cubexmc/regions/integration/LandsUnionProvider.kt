@@ -47,6 +47,27 @@ class LandsUnionProvider(private val plugin: RegionsPlugin) : UnionProvider {
     }
 
     /**
+     * `/l edit` 选定的 Land 所属的 Nation。
+     *
+     * Lands 8 的签名是 `LandPlayer#getEditLand(boolean)`（布尔参数是"没显式选时要不要退回
+     * 到所在/所有的领地"）；true 试不出来再试 false，最后才试旧版的无参重载——
+     * 我们不编译依赖 Lands，签名差异只能运行时试。
+     * 取不到就返回 null，绝不拿"玩家的第一个 Land"冒充：选错工会 = 打错一整场。
+     */
+    override fun getEditUnion(playerId: UUID): UnionRef? {
+        val integration = integration() ?: return null
+        val player = invoke(integration, "getLandPlayer", playerId)
+            ?: invoke(integration, "getPlayer", playerId)
+            ?: return null
+        val land = invoke(player, "getEditLand", true)
+            ?: invoke(player, "getEditLand", false)
+            ?: invoke(player, "getEditLand")
+            ?: return null
+        val nation = invoke(land, "getNation") ?: return null
+        return toRef(nation)?.also { ref -> nationCache[ref.id] = nation }
+    }
+
+    /**
      * 只有"装了 Lands 但 API 解析不了"才算依赖异常；玩家没有 Land / Land 没有 Nation
      * 属于"确实没有国家"，由调用方按各自文案处理。
      */

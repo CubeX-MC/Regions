@@ -31,6 +31,9 @@ Contract 同样只是可选连接。`dual_pvp` 和 `union_war` 可在 Mode 中�
 
 ## 构建与自动检查
 
+2026-09-23 候选包通过 380 项自动化测试及 JAR 门禁，并完成隔离 Paper 加载、重载和停服验证。
+实际 Lands/Folia、多客户端比赛和真实进程崩溃恢复验收仍待执行；证据见 [本轮验证记录](docs/completion-2026-09-23.md)。
+
 ```text
 ./gradlew :Regions:test
 ./gradlew :Regions:build
@@ -62,13 +65,19 @@ Contract 同样只是可选连接。`dual_pvp` 和 `union_war` 可在 Mode 中�
 - `/regions publish <id>`：发布 revision
 - `/regions inspect <玩家>`：查看会话与租约
 - `/regions cleanup <玩家>`：事故恢复
-- `/regions game <id> teams <nationA> <nationB>`：锁定工会战本场的两个 Nation（报名前设置）
+- `/regions game <id> teams [编号|名字] [编号|名字]`：锁定工会战本场的两个 Nation（报名前设置）。
+  **不带参数**会列出当前对阵与带编号的可选工会；参数可以是编号、工会名（自动去颜色码）、
+  唯一的名字前缀，或者旧的 ULID。名字重复时会列出候选让你选，不会替你猜。
+  还可以写 `me`（或 `edit`）代表**你当前用 `/l edit` 选定领地所属的国家**；
+  只写一个参数（`teams <对手>`）时甲方自动取这个国家。领地不属于任何国家就会如实报错，不会拿别的领地冒充
 
 权限以 `plugin.yml` 为准。常规管理需要治理权限和来源所有权同时满足；`regions.superadmin` 仅用于紧急接管。
 
 ## 玩家入口
 
 - `/regions`：打开活动大厅（只列已发布且启用的场地；不可报名的卡片直接显示原因）。
+  **玩家侧的事情在这里都能点完**：正在参赛时有“我的比赛”直达按钮；
+  `locale-mode: player` 时右下角有语言按钮（中文 → English → 自动循环，整页立刻换语言）。
   大厅支持玩法循环筛选与“只看可报名”，可清除筛选；筛选后仍无结果会给专门的空态提示。
   具备管理资格的人在大厅里额外有“我的场地”入口，管理界面仍是 `/regions gui`。
 - `/regions create` 无参数进入创建向导：选玩法 → 选地块（自动生成场地 ID）→ 设置本玩法必填项
@@ -77,13 +86,38 @@ Contract 同样只是可选连接。`dual_pvp` 和 `union_war` 可在 Mode 中�
 - `/regions game <id> join`：报名本场（权限 `regions.game.join`，默认随 `regions.use`）。
   工会战在报名时选择 Nation；没有 Nation 会被拒绝并说明原因。
 - `/regions game <id> ready|unready`：准备与取消准备，权限 `regions.game.ready`。
-- `/regions game <id> leave`：退出报名，或在进行中的比赛里弃权。退出通道不设额外权限，
+- `/regions game <id> leave`：退出报名，或在进行中的比赛里弃权。
+  报名页里这是一个**常驻按钮**（只要已报名就在）——主按钮在准备后会变成“取消准备”，
+  退赛不该因此变成只能敲命令。退出通道不设额外权限，
   失去参与权限的玩家同样能退出并拿回装备。
 - `/regions game <id> spectate`：到配置的场外观战点观看比赛（权限 `regions.game.spectate`）。
 - `/regions game <id> status|result`：查看本场状态与上一场结果（权限 `regions.game.view`）。
 - `/regions language <zh_CN|en_US|auto>`：选择自己的显示语言，权限 `regions.language.select`。
   **仅在 `config.yml` 的 `locale-mode: player` 时生效**；默认的 `locale-mode: server` 下全服统一使用 `language` 指定的语言。
   玩家未选择时按客户端语言归一（zh* → zh_CN、en* → en_US，其余回退服务器语言）。
+
+## 八种玩法共用的参与契约
+
+除 `free_event`（它没有比赛）之外的**七种玩法**遵守同一份契约，不分战斗、竞速还是捉迷藏：
+
+| 契约 | 含义 |
+|---|---|
+| 走入场地 ≠ 报名 | 进场只提示一次"这里可以报名"，带冷却（`modes.entry-prompt-cooldown-seconds`，默认 60 秒）；只有 `join`（命令或大厅按钮）才写进名单。 |
+| 完整报名册 | `join` / `ready` / `unready` / `leave` / `spectate` 对七种玩法一致可用；大厅主按钮按当前状态自动切换。 |
+| 装备托管 | `replace-gear` / `kit` / `armor` / `offhand` 在**每一种**接管装备的玩法里行为一致，先持久化 escrow 再换装，写回确认后才删记录；托管期间禁止丢弃与拾取。 |
+| 成员隔离 | 比赛期间局外人与选手互不造成玩家来源的伤害与负面状态；观战者既不造成也不承受。生物与环境伤害不受影响。 |
+| 指令封锁 | 比赛进行中按 `modes.allowed-commands` 拦截逃跑类指令，七种玩法一视同仁。 |
+| 结构化结果 | 每局结束写一条结果（outcome、胜者、原因、名次），`/regions game <id> result` 与大厅结果卡读同一份，重启后仍在。 |
+| 崩溃可恢复 | 重启／重载中止未收尾的比赛并逐人归还装备；离线玩家保留待恢复记录，登录后继续。 |
+
+同一玩家同时只能关联一场比赛（包括观战）；报名或观战阶段可退出后换场，运行中的历史参赛记录保留到本局结束。
+竞速与捉迷藏准备阶段最多等待 10 秒，收齐回执后才开始；战斗与竞速的开赛传送失败会中止比赛。
+装备托管期间还禁止外部容器操作、方块放置和向盔甲架／物品展示框转移物品，仍可使用自身背包及 Regions 菜单。
+死亡时保留托管，重生后归还；玩家数据保存失败时保留恢复记录，不能删除 escrow 文件绕过。
+
+`free_event` 是**唯一**没有比赛的玩法：它只是一块带规则、效果与触发动作的场地，
+没有报名、胜负或装备托管，`join` / `ready` / `start` 会明确告诉你这不是对战类玩法，
+而不是默默什么都不做。它接受的参数也只有触发动作能引用的返回点。
 
 ## 战斗玩法
 
@@ -97,7 +131,7 @@ Contract 同样只是可选连接。`dual_pvp` 和 `union_war` 可在 Mode 中�
 
 - **走入场地不等于同意参赛**：进入战斗场地只提示一次“这里可以报名”，提示带冷却
   （`modes.entry-prompt-cooldown-seconds`，默认 60 秒）；只有 `join`（命令或大厅按钮）才会进入名单。
-- 工会战开报名前，场地主先用 `/regions game <id> teams <nationA> <nationB>` 锁定本场两个 Nation
+- 工会战开报名前，场地主先用 `/regions game <id> teams`（先不带参数看编号）锁定本场两个 Nation
   （权限 `regions.game.start` 加场地管理资格）。同时属于多个 Nation 的玩家必须在报名时显式选队；
   比赛不会退化成自由混战。
 - 开赛前会一次性检查资金映射、装备托管与传送：任何一名玩家失败都会撤销整场开赛，
@@ -110,6 +144,30 @@ Contract 同样只是可选连接。`dual_pvp` 和 `union_war` 可在 Mode 中�
 - 观战者既不能造成也不能承受比赛伤害；候场者、局外人与其他比赛的玩家同样被隔离。
 - 结果记录 outcome、获胜方、原因与奖励状态：`/regions game <id> result` 与大厅结果卡展示同一份结果。
 
+## 竞速玩法
+
+| 玩法 | 载具要求 | 计时与胜负 |
+|---|---|---|
+| `run_race` 跑步赛道 | 默认必须**步行**（`vehicle: none`） | 起点→检查点→终点；先到者名次靠前 |
+| `boat_race` 划船赛道 | 默认必须在**船上**（含竹筏） | 同上；不在船上时检查点与终点不计 |
+| `horse_race` 骑马赛道 | 默认必须**骑马**（含骷髅马、僵尸马） | 同上 |
+
+- 载具约束可按阶段与逐个检查点覆盖：`vehicle` → `start-vehicle` / `finish-vehicle` →
+  `checkpoint-vehicles`（分号分隔，一个检查点一项）。
+- 时限三个历史键（`timeout-seconds` / `max-duration-seconds` / `duration-seconds`）等价，
+  `0` 表示不限时；开赛方式 `start-mode: vote`（全员准备）或 `judge`（裁判 `/regions game <id> start`）。
+- 名次即完赛顺序；没完赛的人按"坚持得更久的排前面"接在后面。
+  **无人完赛就是平局**，不会为了凑一个冠军把某个人抬上去。
+- 中途退赛与死亡的选手仍然留在这一局的结果记录里——"谁参加过这局"要查得到。
+
+## 捉迷藏
+
+- `seekers` 直接指定搜寻者人数，或用 `seeker-ratio`（0.05–0.8）按比例取；两者都不填按 0.2。
+- `hide-seconds` 内搜寻者不能移动；`round-seconds` 到点仍有躲藏者存活则躲藏者获胜。
+- 搜寻者攻击躲藏者 = 抓到，**伤害会被取消**；`found-becomes-seeker` 决定被抓的人转阵营还是出局。
+- 除这一下之外，本局内任何玩家来源的伤害都被拒绝——此前躲藏者可以反过来把搜寻者打死。
+- `seeker-kit` / `hider-kit` 分角色发装备，未设时回落到 `kit`；`armor` / `offhand` 同样生效。
+
 ## 权限
 
 以 `plugin.yml` 为准。参与类叶节点挂在 `regions.use` 之下，声明与命令里的实际检查一致
@@ -119,12 +177,12 @@ Contract 同样只是可选连接。`dual_pvp` 和 `union_war` 可在 Mode 中�
 |---|---|---|
 | `regions.use` | true | 参与场地的活动（`/regions game ... join\|ready\|spectate\|status`）。撤销它可挡住一组玩家参加他人活动；办赛另有来源所有权门槛，不靠这个节点。 |
 | `regions.game.view` | true | 查看比赛状态与结果（`/regions game <id> status\|result`）。 |
-| `regions.game.join` | true | 报名（`/regions game <id> join`）。进入区域本身不等于报名，只有该节点加命令才会把你放进名单。 |
+| `regions.game.join` | true | 报名（`/regions game <id> join`）。**七种玩法一致**：进入区域本身不等于报名，只有该节点加命令才会把你放进名单。 |
 | `regions.game.ready` | true | 准备与取消准备（`/regions game <id> ready\|unready`）。 |
-| `regions.game.spectate` | true | 到观战点观看进行中的比赛（`/regions game <id> spectate`）。 |
+| `regions.game.spectate` | true | 到观战点观看进行中的比赛（`/regions game <id> spectate`），竞速与捉迷藏同样支持。 |
 | `regions.language.select` | true | 选择个人显示语言，仅 `locale-mode: player` 时生效。 |
 | `regions.admin` | op | RuleGems 统治者管理入口，仍需来源所有权；下含 `regions.game.start` / `regions.game.end`。 |
-| `regions.game.start` | false | 裁判发令（赛跑／回合模式）与锁定国家对阵（`/regions game <id> teams`），另需场地管理资格。 |
+| `regions.game.start` | false | 裁判发令（竞速／捉迷藏的 `start-mode: judge`）与锁定国家对阵（`/regions game <id> teams`），另需场地管理资格。战斗三兄弟在全员准备后自动开赛，没有发令这一步。 |
 | `regions.game.end` | false | 强制结束比赛，另需场地管理资格；战斗场地还要求 `regions.region.edit`。 |
 | `regions.superadmin` | op | 紧急接管与事故恢复。 |
 
@@ -134,9 +192,60 @@ Contract 同样只是可选连接。`dual_pvp` 和 `union_war` 可在 Mode 中�
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `modes.entry-prompt-cooldown-seconds` | 60 | 走入战斗场地时“这里可以报名”提示的冷却秒数；缺失时按 60 处理。 |
+| `modes.entry-prompt-cooldown-seconds` | 60 | 走入比赛场地时“这里可以报名”提示的冷却秒数，七种玩法共用；缺失时按 60 处理。 |
 
 其余配置见 `config.yml` 内的注释；语言策略 `locale-mode`、审计上限与发布保留数等沿用既有说明。
+
+## “现在能不能开一场”只有一份答案
+
+活动大厅的灰卡原因、创建向导的必填项、场地详情页的就绪摘要，现在全部出自
+`VenueReadiness`。阻塞原因分五层，展示顺序即优先级：
+
+| 层 | 含义 | 谁会被它拦住 |
+|---|---|---|
+| CONFIG | 玩法必填项没填（出生点、出场点、装备预设…） | 创建向导 |
+| VALIDATION | 发布校验的 ERROR 条目 | 发布页、大厅、详情页 |
+| DEPENDENCY | 来源插件 / 工会来源不可用 | 大厅、详情页 |
+| LIFECYCLE | 未发布、停用、冻结、归档 | 大厅、详情页 |
+| MATCH | 上一局正在恢复、这一局已开打 | 大厅、详情页 |
+| ROSTER | 人数已满 | 大厅、详情页 |
+
+**各页只按自己关心的层拦**：向导看 CONFIG，大厅看运行时那几层——
+向导意义上的“必填项”不该把已发布的场地在大厅里变灰（那是发布校验的职责）。
+原因文案统一在 `readiness.*`，三处显示的是同一句话。
+
+## 玩法页的三块标签
+
+玩法页拆成**基础参数 / 点位 / 赛制**三块，左上角三个按钮切换，当前那块是绿色；
+某块在该玩法下没有内容就不显示，不会点进去一片空白。
+
+- **基础**：人数上下限、是否需要确认、是否托管装备、装备预设、载具检查
+- **点位**：出生点清单（战斗玩法）、复活点、起终点与检查点（竞速）
+- **赛制**：时限、回合数、开赛方式、裁判、工会战的对阵与外交前置
+
+出生点不再是一个"已设 N 个"的计数按钮：点进清单页可以逐个看坐标、逐个删，
+站到位置上点"在这里添加"即可；工会战的甲/乙两组在同一页切换。
+
+## 药水与范围效果的隔离
+
+伤害类药水走伤害事件，和近战、箭矢同一套判定；**纯效果药水**（中毒、缓慢、虚弱、失明）
+不触发伤害事件，所以另接了泼洒药水与滞留药水云两个事件：
+
+- 局外人不能给选手上状态，选手也不能影响观战者与局外人（双向）
+- 候场、准备、回合间隔、恢复阶段一律不生效
+- 同局敌对双方可以互上负面效果；**工会战同队的负面效果被友伤规则拦下**，治疗、增益类则放行
+- 自己喝的药永远算数；发射器丢的药因为无法归因，对选手一律无效
+- 混合药水只要含一个负面效果就整瓶当负面处理（否则搭一个回血就能把中毒送进场里）
+
+## 比赛期间的指令封锁
+
+比赛一旦过了开赛屏障（PREPARING → 回合间隔），选手只能用本插件的 `/regions`；
+`/spawn`、`/home`、`/tp`、`/l edit` 这类指令一律拦下——在 PVP 里它们就是最短的逃跑通道。
+服主可用 `modes.allowed-commands` 额外放行（写根指令，不带 `/`）；`plugin:cmd` 形式按去掉命名空间后的名字判定，
+所以 `/lands:l` 与 `/l` 同等对待。
+
+这道封锁独立于场地的 `commands` Flag，**不受 `regions.bypass.flags` 影响**（比赛内部保护不认场地级 bypass）；
+只有 `regions.superadmin` 能绕过，留给紧急处置卡住的局。
 
 ## 状态安全
 

@@ -116,10 +116,10 @@ class ActivityLobbyLogicTest {
             type: String = "dual_pvp",
         ) = ActivityLobbyLogic.entry(region(type = type), status, ending, sourceAvailable, "Lands", unions).reasonKey
 
-        assertEquals("gui.lobby.reason.source-unavailable", reason(sourceAvailable = false))
-        assertEquals("gui.lobby.reason.unions-unavailable", reason(unions = false, type = "union_war"))
-        assertEquals("gui.lobby.reason.restoring", reason(ending = true))
-        assertEquals("gui.lobby.reason.running", reason(status = GameStatus("arena", "dual_pvp", GamePhase.RUNNING, players = 2)))
+        assertEquals("readiness.source-unavailable", reason(sourceAvailable = false))
+        assertEquals("readiness.unions-unavailable", reason(unions = false, type = "union_war"))
+        assertEquals("readiness.restoring", reason(ending = true))
+        assertEquals("readiness.running", reason(status = GameStatus("arena", "dual_pvp", GamePhase.RUNNING, players = 2)))
         // 满员原因依赖 max-players 设置，单独在 full 用例里验证。
     }
 
@@ -131,7 +131,7 @@ class ActivityLobbyLogicTest {
             ending = false, sourceAvailable = true, sourceLabel = "Lands", unionsAvailable = true,
         )
         assertFalse(full.available)
-        assertEquals("gui.lobby.reason.full", full.reasonKey)
+        assertEquals("readiness.full", full.reasonKey)
 
         val cappedButBelow = ActivityLobbyLogic.entry(
             region(values = mapOf("max-players" to "4")), status,
@@ -153,6 +153,6 @@ class ActivityLobbyLogicTest {
             region(), GameStatus("arena", "dual_pvp", GamePhase.RUNNING, players = 2),
             ending = true, sourceAvailable = false, sourceLabel = "Lands", unionsAvailable = false,
         )
-        assertEquals("gui.lobby.reason.source-unavailable", entry.reasonKey)
+        assertEquals("readiness.source-unavailable", entry.reasonKey)
     }
 }

@@ -1,5 +1,10 @@
 # Regions 架构
 
+2026-09-22 补充：`MatchAdmission` 以玩家 UUID→比赛 UUID 原子占位，三类比赛服务共同使用；
+延迟释放只删除对应比赛的占位，各玩法 escrow 仍各自持有装备真相。
+竞速／捉迷藏锁定本局场地定义，准备阶段等待回执并设 10 秒上限；战斗／竞速等待异步传送完成。
+装备恢复先保存玩家数据再确认和删除记录，死亡玩家在重生后重试。验证见 [本轮证据](completion-2026-09-22.md)。
+
 ## 数据流
 
 `RegionSource` 解析外部或 Cuboid 几何；`RegionRegistry` 保存运行时已发布定义；`RegionPublishingService` 管理 draft、revision、preview、publish 和 rollback。`RegionDetectionService` 在实体调度器上检测玩家所在区域，并交给 `RegionOverlapResolver` 选择主 Mode、Flag、Effect 和 Trigger 来源。
@@ -31,6 +36,24 @@
 - **临时装备防转移**：托管期间禁止丢弃与拾取（`CombatModeService.isGearEscrowed` 同时覆盖战斗与回合两种托管），使恢复快照始终与场上物品一致。
 - **FINISHING 进度可见**：结算期间告知参与者还有几人待恢复与资金状态，每恢复一人刷新一次。
 
+## 玩法共用层（2026-09-19）
+
+八种玩法里有七种是"比赛"。它们此前分属三套互不相干的实现，同一个概念有三种行为
+（装备键在战斗层生效、在捉迷藏半生效、在竞速完全不生效）。共用部分现在收在
+`org.cubexmc.regions.mode` 下，战斗层的 `org.cubexmc.regions.match` 继续负责它自己的状态机。
+
+| 组件 | 职责 | 使用者 |
+| --- | --- | --- |
+| `ModeParameterSchema` | 每种玩法自己的参数表，一律严格校验。玩法注册、能力目录与参数表读同一份清单。 | `BuiltInRegionCapabilities`、`RegionsPlugin`、`RegionsCommand` |
+| `ModeRoster` | 显式报名册：报名／准备／取消准备／退出／观战／淘汰顺序，阶段沿用 `MatchPhase`。 | 竞速、捉迷藏 |
+| `ModeGearEscrow` | 崩溃安全的托管协议：peek → 写回 → 落盘确认 → 删记录。`confirmed` 标记让宕机停在两步之间时只补清理，不覆盖新背包。 | 竞速、捉迷藏 |
+| `ModeKit` | 唯一一份装备发放与快照写回实现（`kit` / `armor` / `offhand`）。 | 三类玩法 |
+| `ModeDamagePolicy` | 竞速与捉迷藏的成员隔离（伤害 + 药水／滞留云），纯判定不碰实体。 | `PlayerLifecycleListener` |
+| `RaceCourse` | 赛道纯逻辑：载具别名与逐点约束、三个同义超时键、半径回退、开赛票数。 | `RaceModeService` |
+| `MatchStore` | 每块场地最后一次比赛结果，八种玩法共用一份（插件持有）。 | 三类玩法、命令、大厅 |
+
+`free_event` 不在其列：它没有比赛，只接受触发动作能引用的返回点。
+
 ## 比赛层（M3–M7）
 
 `dual_pvp`、`union_war`、`free_for_all` 共用 `org.cubexmc.regions.match` 包，报名、准备、开赛、伤害、恢复与终结只有这一条实现路径。
@@ -42,7 +65,7 @@
 | `MatchRules` | 纯规则：`MatchSettings`/`MatchView`/`MatchVerdict` 加上 `DuelRules`、`NationBattleRules`、`LastPlayerStandingRules`，由 `MatchRulesCatalog` 按玩法类型选择；未实现规则的玩法不会进入状态机。 |
 | `CombatDamagePolicy` | 纯伤害矩阵：给定攻击者、受害者与会话状态返回允许或拒绝，不接触 Bukkit 实体。 |
 | `MatchSpawns` | 点位文本（`world,x,y,z[,yaw,pitch]`，`;` 分隔）的解析与校验，含大乱斗出生点间距检查，不依赖服务器实例。 |
-| `MatchStore` | 比赛元数据落盘（`matches.yml`，schema `match-store-version: 1`）。 |
+| `MatchStore` | 比赛元数据与**每块场地最后一次结果**落盘（`matches.yml`，schema `match-store-version: 1`）。由 `RegionsPlugin` 持有，战斗、竞速与捉迷藏写同一份，所以 `/regions game <id> result` 不必按玩法分派。 |
 | `GearSnapshot` | 入场前的玩家状态快照：背包、护甲、副手、经验、游戏模式与返回点。只被 `CombatGearStore` 持有和落盘，比赛自身不保存第二份可变装备真相；新增受控状态时在此加字段并保持旧记录可读。 |
 
 ### 状态机
@@ -69,8 +92,8 @@ PREPARING 与 COUNTDOWN 都不放行伤害。`WAITING` 只接受报名与准备�
 
 | 文件 | 所有者 | 内容 |
 | --- | --- | --- |
-| `matches.yml` | `MatchStore` | 比赛阶段、名单与队伍／Nation 快照、结果、恢复进度 |
-| 装备 escrow | `CombatGearStore` | 被托管的物品与受控玩家状态（`GearSnapshot`） |
+| `matches.yml` | `MatchStore` | 比赛阶段、名单与队伍／Nation 快照、结果、恢复进度（八种玩法共用结果区） |
+| 装备 escrow | `CombatGearStore` | 被托管的物品与受控玩家状态（`GearSnapshot`）。三类玩法各一个文件：`combat-escrow.yml`／`race-escrow.yml`／`round-escrow.yml`，但**协议只有一份**（战斗层在协调器里，另两类在 `ModeGearEscrow`）。 |
 | `reward-funding.yml` | `RewardFundingStore` | Contract 资金 operation lease 与锁定证据 |
 
 三者互不复制对方的可变数据：比赛记录不带物品副本，装备 escrow 不带资金状态，资金 lease 只带结算所需的映射与证据。`MatchStore` 同一区域同时只保留一场未收尾的比赛，未完成的上一局阻止同场新局。
@@ -112,4 +135,3 @@ PREPARING 与 COUNTDOWN 都不放行伤害。`WAITING` 只接受报名与准备�
 磁盘写入采用临时文件加原子替换（不支持时安全降级）。`regions.yml` 与 `reward-funding.yml` 先完整解析到临时快照；任一记录损坏都会使 reload 失败并保留当前内存，禁止跳过坏记录后覆盖原文件。持久化失败会回滚对应内存变更或玩家变更。Effect 组合只在整组成功后缓存签名，失败组会清理并在下一次刷新重试。审计保存发布、强制操作、模式结束和比赛结果等关键事件。
 
 资金 lease 在调用 Contract 前写入 PREPARING/SETTLING/REFUNDING；进入 SETTLING 时先持久化比赛类型与获胜方线索，再查询 provider。Contract 暂时不可用时重启/reload 可使用同一 operation id 继续解析胜者并 settle，不会把已经结束的比赛误走退款。Contract 返回 `REVIEW_REQUIRED` 时 lease 保留，禁止自动换 operation id 重试。
-

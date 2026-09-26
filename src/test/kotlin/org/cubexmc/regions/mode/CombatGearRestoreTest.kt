@@ -7,6 +7,7 @@ import org.bukkit.inventory.PlayerInventory
 import org.cubexmc.core.CubexLogger
 import org.cubexmc.regions.RegionsPlugin
 import org.cubexmc.regions.match.GearSnapshot
+import org.cubexmc.regions.match.MatchStore
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -141,6 +142,10 @@ class CombatGearRestoreTest {
         val plugin = mock(RegionsPlugin::class.java)
         `when`(plugin.dataFolder).thenReturn(tempDir.toFile())
         `when`(plugin.log()).thenReturn(CubexLogger(Logger.getLogger("CombatGearRestoreTest")))
+        // 比赛结果 store 现在由插件统一持有（八种玩法共用一份），服务只是借用。
+        `when`(plugin.matchStore()).thenReturn(
+            MatchStore(tempDir.resolve("matches.yml").toFile(), CubexLogger(Logger.getLogger("CombatGearRestoreTest"))),
+        )
         val player = mock(Player::class.java)
         val inventory = mock(PlayerInventory::class.java)
         `when`(player.inventory).thenReturn(inventory)

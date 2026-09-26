@@ -25,6 +25,8 @@ internal enum class View {
     OWNED_AREAS,
     TEMPLATES,
     TEMPLATE_CONFIRM,
+    UNION_PICKER,
+    SPAWN_LIST,
     ;
 
     /**
@@ -67,6 +69,10 @@ internal class RegionsHolder(
     val templateConfirmation: TemplateConfirmation? = null,
     val lobbyPage: Int = 0,
     val returnToPublish: Boolean = false,
+    /** 玩法页当前打开的标签（基础/点位/赛制）。 */
+    val modeTab: ModeTab = ModeTab.BASIC,
+    /** 出生点清单当前看的是否乙方（仅工会战）。 */
+    val spawnTeamB: Boolean = false,
     /** 工会战报名时的候选 Nation（稳定 ID → 显示名），按顺序映射到队伍按钮槽位。 */
     val teamChoices: List<Pair<String, String>> = emptyList(),
     /** 发布确认页展示的草稿 revision：确认发布时用它核对草稿没有被别人改过。 */
@@ -134,9 +140,9 @@ internal object GuiSlots {
 
     fun modeConfiguration(type: String): Set<Int> =
         when (type.lowercase(java.util.Locale.ROOT)) {
-            "dual_pvp" -> setOf(19, 20, 21, 22, 25, 28, 29, 30, 31, 33, 34, 45, 46, 47, 50)
-            "free_for_all" -> setOf(19, 20, 21, 22, 28, 29, 30, 31, 33, 34, 45, 46, 47)
-            "union_war" -> setOf(19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 33, 34, 45, 46, 47, 50, 51)
+            "dual_pvp" -> setOf(19, 20, 21, 22, 25, 28, 29, 30, 31, 33, 34, 44, 45, 46, 47, 50)
+            "free_for_all" -> setOf(19, 20, 21, 22, 28, 29, 30, 31, 33, 34, 44, 45, 46, 47)
+            "union_war" -> setOf(19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 31, 33, 34, 44, 45, 46, 47, 50, 51)
             "run_race", "boat_race", "horse_race" ->
                 setOf(19, 20, 24, 26, 32, 36, 37, 38, 39, 40, 41, 42, 43, 44, 51)
             "hide_and_seek" -> setOf(19, 20, 21, 22, 25, 33, 34, 42, 44, 45, 46, 47, 50)

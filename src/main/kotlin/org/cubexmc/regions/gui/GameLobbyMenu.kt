@@ -160,8 +160,9 @@ internal class GameLobbyMenu(private val gui: RegionsGui) {
             )
         }
         if (GameLobbyRules.hasReady(modeType)) {
+            val joined = participants.any { it.playerId == player.uniqueId }
             val action = GameLobbyRules.action(
-                joined = participants.any { it.playerId == player.uniqueId },
+                joined = joined,
                 ready = participants.any { it.playerId == player.uniqueId && it.state == ParticipantState.READY },
                 phase = phaseOf(region),
                 eliminated = participants.any {
@@ -170,6 +171,11 @@ internal class GameLobbyMenu(private val gui: RegionsGui) {
                 },
             )
             inventory.setItem(40, actionButton(player, action))
+            // 退赛不该只存在于主按钮的某一个状态里：准备好之后主按钮是"取消准备"，
+            // 没有这个按钮的话，玩家就只剩下敲命令一条路。
+            if (joined && plugin.combatModes().isCombatMode(region) && action != GameLobbyRules.LobbyAction.LEAVE) {
+                inventory.setItem(38, text.item(player, Material.BARRIER, "gui.game.leave"))
+            }
         }
         if (teamChoices.isNotEmpty()) {
             teamChoices.take(7).forEachIndexed { index, (id, name) ->
@@ -227,52 +233,84 @@ internal class GameLobbyMenu(private val gui: RegionsGui) {
             return
         }
         when (slot) {
+            38 -> leave(player, region, holder.lobbyFilter)
             40 -> primaryAction(player, region, holder.lobbyFilter)
             42 -> spectate(player, region, holder.lobbyFilter)
             49 -> gui.lobby.open(player, holder.lobbyPage, holder.lobbyFilter)
         }
     }
 
+    /**
+     * 报名页主按钮。七种玩法走**同一条**流程：报名 → 准备 → 取消准备 → 退出 / 观战。
+     *
+     * 此前只有战斗三兄弟有这套按钮，竞速与捉迷藏点主按钮只会调 `ready()`——
+     * 而那两类玩法当时压根没有报名这一步（走进区域就算进场）。现在名单是显式的，
+     * 按钮逻辑也就能共用一份。
+     */
     private fun primaryAction(player: Player, region: RegionDefinition, filter: LobbyFilter) {
-        val modeType = region.mode?.type?.lowercase()
-        when (modeType) {
-            "run_race", "boat_race", "horse_race" -> plugin.raceModes().ready(player, region.id)
-            "hide_and_seek" -> plugin.roundModes().ready(player, region.id)
-            "dual_pvp", "union_war", "free_for_all" -> {
-                val participants = plugin.combatModes().participants(region.id)
-                val me = participants.firstOrNull { it.playerId == player.uniqueId }
-                val phase = phaseOf(region)
-                when (GameLobbyRules.action(
-                    joined = me != null,
-                    ready = me?.state == ParticipantState.READY,
-                    phase = phase,
-                    eliminated = me?.state == ParticipantState.ELIMINATED || me?.state == ParticipantState.LEFT,
-                )) {
-                    GameLobbyRules.LobbyAction.JOIN -> handleJoin(player, region, null, filter)
-                    GameLobbyRules.LobbyAction.READY -> {
-                        plugin.combatModes().ready(player, region.id)
-                        open(player, region.id, 0, filter)
-                    }
-
-                    GameLobbyRules.LobbyAction.UNREADY -> {
-                        if (!plugin.combatModes().unready(player, region.id)) {
-                            text.send(player, "game.match.unready.not-possible")
-                        }
-                        open(player, region.id, 0, filter)
-                    }
-
-                    GameLobbyRules.LobbyAction.LEAVE -> {
-                        plugin.combatModes().leave(player, region.id)
-                        open(player, region.id, 0, filter)
-                    }
-
-                    GameLobbyRules.LobbyAction.SPECTATE -> spectate(player, region, filter)
-                }
+        if (!GameLobbyRules.hasReady(region.mode?.type)) return
+        val state = participantStateOf(region, player)
+        when (GameLobbyRules.action(
+            joined = state != null,
+            ready = state == ParticipantState.READY,
+            phase = phaseOf(region),
+            eliminated = state == ParticipantState.ELIMINATED || state == ParticipantState.LEFT,
+        )) {
+            GameLobbyRules.LobbyAction.JOIN -> handleJoin(player, region, null, filter)
+            GameLobbyRules.LobbyAction.READY -> {
+                readyFor(player, region)
+                open(player, region.id, 0, filter)
             }
 
-            else -> Unit
+            GameLobbyRules.LobbyAction.UNREADY -> {
+                if (!unreadyFor(player, region)) {
+                    text.send(player, "game.match.unready.not-possible")
+                }
+                open(player, region.id, 0, filter)
+            }
+
+            GameLobbyRules.LobbyAction.LEAVE -> {
+                leaveFor(player, region)
+                open(player, region.id, 0, filter)
+            }
+
+            GameLobbyRules.LobbyAction.SPECTATE -> spectate(player, region, filter)
         }
     }
+
+    // ---------------------------------------------------- 按玩法分派的报名册动作
+
+    private fun participantStateOf(region: RegionDefinition, player: Player): ParticipantState? =
+        when (region.mode?.type?.lowercase()) {
+            "run_race", "boat_race", "horse_race" -> plugin.raceModes().participantState(region.id, player.uniqueId)
+            "hide_and_seek" -> plugin.roundModes().participantState(region.id, player.uniqueId)
+            "dual_pvp", "union_war", "free_for_all" ->
+                plugin.combatModes().participants(region.id).firstOrNull { it.playerId == player.uniqueId }?.state
+            else -> null
+        }
+
+    private fun readyFor(player: Player, region: RegionDefinition) {
+        when (region.mode?.type?.lowercase()) {
+            "run_race", "boat_race", "horse_race" -> plugin.raceModes().ready(player, region.id)
+            "hide_and_seek" -> plugin.roundModes().ready(player, region.id)
+            else -> plugin.combatModes().ready(player, region.id)
+        }
+    }
+
+    private fun unreadyFor(player: Player, region: RegionDefinition): Boolean =
+        when (region.mode?.type?.lowercase()) {
+            "run_race", "boat_race", "horse_race" -> plugin.raceModes().unready(player, region.id)
+            "hide_and_seek" -> plugin.roundModes().unready(player, region.id)
+            else -> plugin.combatModes().unready(player, region.id)
+        }
+
+    private fun leaveFor(player: Player, region: RegionDefinition): Boolean =
+        when (region.mode?.type?.lowercase()) {
+            "run_race", "boat_race", "horse_race" -> plugin.raceModes().leave(player, region.id)
+            "hide_and_seek" -> plugin.roundModes().leave(player, region.id)
+            "dual_pvp", "union_war", "free_for_all" -> plugin.combatModes().leave(player, region.id)
+            else -> false
+        }
 
     private fun handleJoin(
         player: Player,
@@ -280,7 +318,12 @@ internal class GameLobbyMenu(private val gui: RegionsGui) {
         teamId: String?,
         filter: LobbyFilter = LobbyFilter(),
     ) {
-        when (val result = plugin.combatModes().join(player, region.id, teamId)) {
+        val outcome = when (region.mode?.type?.lowercase()) {
+            "run_race", "boat_race", "horse_race" -> plugin.raceModes().join(player, region.id)
+            "hide_and_seek" -> plugin.roundModes().join(player, region.id)
+            else -> plugin.combatModes().join(player, region.id, teamId)
+        }
+        when (val result = outcome) {
             is JoinResult.Joined -> open(player, region.id, 0, filter)
             is JoinResult.Rejected -> {
                 text.send(player, result.key, result.args)
@@ -297,8 +340,18 @@ internal class GameLobbyMenu(private val gui: RegionsGui) {
         }
     }
 
+    /** 退赛。七种玩法都有报名名单了，所以这个按钮对每一种都有意义。 */
+    private fun leave(player: Player, region: RegionDefinition, filter: LobbyFilter = LobbyFilter()) {
+        leaveFor(player, region)
+        open(player, region.id, 0, filter)
+    }
+
     private fun spectate(player: Player, region: RegionDefinition, filter: LobbyFilter = LobbyFilter()) {
-        val result = plugin.combatModes().spectate(player, region.id)
+        val result = when (region.mode?.type?.lowercase()) {
+            "run_race", "boat_race", "horse_race" -> plugin.raceModes().spectate(player, region.id)
+            "hide_and_seek" -> plugin.roundModes().spectate(player, region.id)
+            else -> plugin.combatModes().spectate(player, region.id)
+        }
         if (result is org.cubexmc.regions.match.SpectateResult.Rejected) {
             text.send(player, result.key, result.args)
         }
@@ -306,7 +359,12 @@ internal class GameLobbyMenu(private val gui: RegionsGui) {
     }
 
     private fun phaseOf(region: RegionDefinition): MatchPhase? {
-        if (!plugin.combatModes().isCombatMode(region)) return null
+        when (region.mode?.type?.lowercase()) {
+            "run_race", "boat_race", "horse_race" -> return plugin.raceModes().phaseOf(region.id)
+            "hide_and_seek" -> return plugin.roundModes().phaseOf(region.id)
+            "dual_pvp", "union_war", "free_for_all" -> Unit
+            else -> return null
+        }
         val status = plugin.combatModes().status(region.id)
         return when (status.phase) {
             GamePhase.IDLE -> if (plugin.combatModes().result(region.id)?.outcome == MatchOutcome.ABORTED) {
@@ -320,8 +378,9 @@ internal class GameLobbyMenu(private val gui: RegionsGui) {
         }
     }
 
+    /** 结果卡片对八种玩法读同一个 store（`free_event` 没有比赛，自然一直是 null）。 */
     private fun resultOf(region: RegionDefinition) =
-        if (plugin.combatModes().isCombatMode(region)) plugin.combatModes().result(region.id) else null
+        if (GameLobbyRules.hasReady(region.mode?.type)) plugin.matchStore().lastResult(region.id) else null
 
     private fun statusOf(region: RegionDefinition): GameStatus = when (region.mode?.type?.lowercase()) {
         "run_race", "boat_race", "horse_race" -> plugin.raceModes().status(region.id)
