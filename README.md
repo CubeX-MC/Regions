@@ -142,7 +142,7 @@ Contract 同样只是可选连接。`dual_pvp` 和 `union_war` 可在 Mode 中�
 
 临时效果使用持久化 lease（`effect-escrow.yml`），战斗和回合装备分别使用装备托管文件。正常退出、死亡、reload、停服和下次启动/登录都会尝试恢复。Folia 停服阶段不会提交无法保证执行的实体任务，而是保留托管数据供下次安全恢复。
 
-Contract 奖励操作另存于 `reward-funding.yml`。一局比赛的 lock、自然胜者 settle、强制结束/reload/崩溃恢复 refund 共用同一个 transaction operation id，只有持有该锁的交易才能终结资金。无法确认的部分结算保留 lease 并要求人工复核，不会生成第二次付款。删除该文件会破坏恢复链，禁止把它当作清理手段。
+Contract 奖励操作另存于 `reward-funding.yml`。一局比赛的 lock、自然胜者 settle、强制结束/reload/崩溃恢复 refund 共用同一个 transaction operation id，只有持有该锁的交易才能终结资金。若锁定回执丢失，Regions 保留 `PREPARING` lease；撤销开赛或重启时先用该 ID 退款，Contract 明确报告无锁时才以同一 ID 重放锁定并退款。仍不能确认时 lease 留存，同场地暂不能开始新的资金局；先恢复 Contract/Vault 后 reload，持续失败则核对两侧 operation 与合同状态并人工复核。无法确认的部分结算也保留 lease，不会生成第二次付款。删除该文件会破坏恢复链，禁止把它当作清理手段。
 
 比赛元数据另存于 `matches.yml`（schema `match-store-version: 1`），只保存阶段、名单、队伍／Nation 快照、结果与恢复进度，不复制物品和余额：装备内容只在装备托管文件，资金只在 `reward-funding.yml`。三者是相互独立的真相来源，任何一个文件都不保存另一份的可变副本。
 

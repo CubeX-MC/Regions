@@ -40,12 +40,20 @@ class RewardFundingService(
 
         val lease = Lease(region.id, configured, UUID.randomUUID().toString(), LeaseState.PREPARING)
         store.put(lease)
-        if (!store.save()) return FundingResult.fail("LEASE_PERSISTENCE_FAILED")
+        if (!store.save()) {
+            // No provider call was made; do not leave an in-memory lease that abortStart could refund/lock.
+            store.remove(region.id)
+            return FundingResult.fail("LEASE_PERSISTENCE_FAILED")
+        }
 
         val locked = provider.lock(lease.operationId, configured, region.id)
         if (!locked.successful) {
-            store.remove(region.id)
-            store.save()
+            // A timeout or reflection failure can arrive after Contract persisted the lock.
+            // Keep this operation id until reconciliation can replay it and refund safely.
+            logger.warn(
+                "Funding lock was not confirmed for ${region.id} (${lease.operationId}): " +
+                    "${locked.code}; keeping the durable lease for reconciliation.",
+            )
             return locked
         }
         lease.state = LeaseState.LOCKED
@@ -97,17 +105,14 @@ class RewardFundingService(
     override fun refund(region: RegionDefinition, reason: String): FundingResult {
         if (configuredContract(region) == null) return FundingResult.ok()
         val lease = store.get(region.id) ?: return FundingResult.ok()
-        return refundLease(lease, reason)
+        return if (lease.state == LeaseState.PREPARING) refundPreparingLease(lease, reason) else refundLease(lease, reason)
     }
 
     /** On startup/reload every unfinished match is aborted safely: terminal retries replay, locks refund. */
     @Synchronized
     override fun reconcile(): List<FundingResult> = store.all().map { lease ->
         when (lease.state) {
-            LeaseState.PREPARING -> {
-                val locked = provider.lock(lease.operationId, lease.contractId, lease.regionId)
-                if (!locked.successful) locked else refundLease(lease, "restart-recovery")
-            }
+            LeaseState.PREPARING -> refundPreparingLease(lease, "restart-recovery")
             LeaseState.LOCKED -> refundLease(lease, "restart-recovery")
             LeaseState.SETTLING -> {
                 val resolved = if (lease.winnerId != null) WinnerResolution(lease.winnerId, FundingResult.ok()) else resolveWinner(lease)
@@ -179,6 +184,16 @@ class RewardFundingService(
     }
 
     private data class WinnerResolution(val winner: UUID?, val result: FundingResult)
+
+    private fun refundPreparingLease(lease: Lease, reason: String): FundingResult {
+        // The lock response may have been lost. A direct refund works even if replaying lock
+        // would now fail eligibility; if no lock exists, replay the original id before refunding.
+        val refunded = provider.refund(lease.operationId, lease.contractId, lease.regionId, reason)
+        if (refunded.successful) return finalize(lease, refunded)
+        if (refunded.code != "LOCK_CONFLICT") return refunded
+        val locked = provider.lock(lease.operationId, lease.contractId, lease.regionId)
+        return if (locked.successful) refundLease(lease, reason) else locked
+    }
 
     private fun refundLease(lease: Lease, reason: String): FundingResult {
         lease.state = LeaseState.REFUNDING

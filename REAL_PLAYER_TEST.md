@@ -42,6 +42,7 @@
 3. 新建 WAGER 后强制结束比赛，核对双方完整退款且没有胜者付款。
 4. 在锁定后临时停用 Contract，结束比赛并确认 `reward-funding.yml` 保留；恢复 Contract 后 reload/restart，核对同一 operation 被重放且没有双付。
 5. 在结算故障场景确认 Contract 进入 DISPUTED/人工复核，Regions 不生成新的 operation id。
+6. 注入“Contract 已持久化 lock、Regions 未收到回执”：准备阶段应中止，`PREPARING` lease 保留同一 operation id；重启或 reload 后只按该 ID 退款或留待复核，不得创建第二个资金操作。另测锁确实未生效时，恢复逻辑以同一 ID 重放锁定再退款。
 
 ## 战斗玩法验收脚本（M3–M7）
 

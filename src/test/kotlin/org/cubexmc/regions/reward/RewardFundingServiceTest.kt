@@ -53,7 +53,7 @@ class RewardFundingServiceTest {
         assertTrue(results.all(FundingResult::successful))
         assertEquals(1, provider.locks)
         assertEquals(1, provider.refunds)
-        assertEquals(listOf("match-id", "match-id"), provider.operations)
+        assertEquals(listOf("match-id", "match-id", "match-id"), provider.operations)
         assertTrue(store.all().isEmpty())
     }
 
@@ -111,6 +111,97 @@ class RewardFundingServiceTest {
         assertEquals(listOf(partyA), provider.winners)
         assertEquals(operationId, provider.operations.last())
         assertTrue(store.all().isEmpty())
+    }
+
+    @Test
+    fun `aborted start with rejected lock preserves the preparing lease for retry`() {
+        val provider = FakeProvider(UUID.randomUUID(), UUID.randomUUID())
+        val store = store()
+        val region = region("dual_pvp")
+        provider.lockFailure = FundingResult.fail("NOT_ELIGIBLE")
+        val service = service(provider, store)
+
+        assertEquals("NOT_ELIGIBLE", service.reserve(region).code)
+        assertEquals("NOT_ELIGIBLE", service.refund(region, "start-aborted").code)
+        val operationId = store.get(region.id)?.operationId
+        assertEquals(LeaseState.PREPARING, store.get(region.id)?.state)
+        assertEquals(operationId, store().get(region.id)?.operationId)
+
+        provider.lockFailure = null
+        assertTrue(service(provider, store()).reconcile().single().successful)
+        assertEquals(6, provider.operations.size)
+        assertTrue(provider.operations.all { it == operationId })
+        assertEquals(1, provider.refunds)
+        assertTrue(store().all().isEmpty())
+    }
+
+    @Test
+    fun `failed initial lease save never calls Contract or leaves a refundable lease`() {
+        val blockedParent = tempDir.resolve("blocked")
+        blockedParent.toFile().writeText("not a directory")
+        val store = RewardFundingStore(blockedParent.resolve("reward-funding.yml").toFile(), logger())
+        val provider = FakeProvider(UUID.randomUUID(), UUID.randomUUID())
+        val region = region("dual_pvp")
+        val service = service(provider, store)
+
+        assertEquals("LEASE_PERSISTENCE_FAILED", service.reserve(region).code)
+        assertTrue(service.refund(region, "start-aborted").successful)
+        assertTrue(store.all().isEmpty())
+        assertTrue(provider.operations.isEmpty())
+    }
+
+    @Test
+    fun `lost lock response keeps the operation id for restart reconciliation`() {
+        val provider = FakeProvider(UUID.randomUUID(), UUID.randomUUID())
+        val originalStore = store()
+        val region = region("dual_pvp")
+        provider.lockFailure = FundingResult.fail("PROVIDER_FAILURE", "response lost after lock")
+        provider.lockCommitsBeforeFailure = true
+
+        val failed = service(provider, originalStore).reserve(region)
+        assertFalse(failed.successful)
+        val operationId = originalStore.get(region.id)?.operationId
+        assertTrue(operationId != null)
+        assertEquals(LeaseState.PREPARING, originalStore.get(region.id)?.state)
+
+        val reloaded = store()
+        assertEquals(operationId, reloaded.get(region.id)?.operationId)
+        assertTrue(service(provider, reloaded).reconcile().single().successful)
+        assertEquals(listOf(operationId, operationId), provider.operations)
+        assertEquals(1, provider.refunds)
+        assertTrue(reloaded.all().isEmpty())
+    }
+
+    @Test
+    fun `aborted start refunds a committed lock despite a lost lock response`() {
+        val provider = FakeProvider(UUID.randomUUID(), UUID.randomUUID())
+        provider.lockFailure = FundingResult.fail("PROVIDER_FAILURE", "response lost after lock")
+        provider.lockCommitsBeforeFailure = true
+        val store = store()
+        val region = region("dual_pvp")
+        val service = service(provider, store)
+
+        assertEquals("PROVIDER_FAILURE", service.reserve(region).code)
+        val operationId = store.get(region.id)?.operationId
+        assertTrue(service.refund(region, "start-aborted").successful)
+
+        assertEquals(listOf(operationId, operationId), provider.operations)
+        assertEquals(1, provider.locks)
+        assertEquals(1, provider.refunds)
+        assertTrue(store().all().isEmpty())
+    }
+
+    @Test
+    fun `eligibility can change after check so a rejected lock keeps its lease`() {
+        val provider = FakeProvider(UUID.randomUUID(), UUID.randomUUID())
+        provider.lockFailure = FundingResult.fail("NOT_ELIGIBLE")
+        val store = store()
+
+        val failed = service(provider, store).reserve(region("dual_pvp"))
+
+        assertEquals("NOT_ELIGIBLE", failed.code)
+        assertEquals(LeaseState.PREPARING, store.get("arena")?.state)
+        assertEquals(store.get("arena")?.operationId, store().get("arena")?.operationId)
     }
 
     @Test
@@ -231,7 +322,10 @@ class RewardFundingServiceTest {
         val winners = mutableListOf<UUID>()
         val operations = mutableListOf<String>()
         var checkAvailable = true
+        var lockFailure: FundingResult? = null
+        var lockCommitsBeforeFailure = false
         var settlementFailure: FundingResult? = null
+        private var lockedOperation: String? = null
 
         override fun check(contractId: String, regionId: String): FundingResult =
             if (checkAvailable) FundingResult.ok(contractId, partyA, partyB)
@@ -240,7 +334,8 @@ class RewardFundingServiceTest {
         override fun lock(operationId: String, contractId: String, regionId: String): FundingResult {
             locks++
             operations += operationId
-            return FundingResult.ok(contractId, partyA, partyB)
+            if (lockFailure == null || lockCommitsBeforeFailure) lockedOperation = operationId
+            return lockFailure ?: FundingResult.ok(contractId, partyA, partyB)
         }
 
         override fun settle(
@@ -261,8 +356,11 @@ class RewardFundingServiceTest {
             reason: String,
         ): FundingResult {
             operations += operationId
-            refunds++
-            return FundingResult.ok(contractId, partyA, partyB)
+            return if (lockedOperation == operationId) {
+                refunds++
+                FundingResult.ok(contractId, partyA, partyB)
+            }
+            else FundingResult.fail("LOCK_CONFLICT")
         }
     }
 }

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### R1 奖励托管恢复（2026-09-23）
+
+- Contract 锁定回执丢失或返回不确定结果时保留 `PREPARING` lease 和原 operation id；撤销开赛／重启先尝试退款，只有确认无锁才以同 ID 重放锁定再退款。首次 lease 落盘失败时，在调用 Contract 前撤销内存记录。未解决的 lease 保留供复核。
+- 385 项 Regions 测试、重新打包与 JAR 门禁通过；隔离 Paper 联合 Contract/Vault/EssentialsX 加载、重载与关闭通过。无真实 WAGER 余额及 Folia 验收，见 [R1 记录](docs/r1-recovery-2026-09-23.md)。
+
 本轮战斗玩法（`PLAN.md` M3–M7）的条目单独分组如下；`PLAN.md` §10.2 的实服／真人验收尚未执行。
 
 ### Fixed（实服验证发现，2026-09-13）
